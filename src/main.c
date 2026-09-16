@@ -45,7 +45,9 @@ int main(int argc, char **argv)
     char err[256];
     if (!mem_load_exe(exe_path, err, sizeof err)) {
         fprintf(stderr, "%s\n", err);
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Test Drive", err, NULL);
+        /* --check promises no window, and a modal box would wait for a click
+           that a script cannot give. stderr already carries the reason. */
+        if (!check) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Test Drive", err, NULL);
         return 1;
     }
     if (check) {
