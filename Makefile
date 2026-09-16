@@ -43,8 +43,12 @@ help: ## Print this help message
 		awk 'BEGIN {FS = ":.*?## "}; \
 		{printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
 
+# A failed configure still writes CMakeCache.txt. Remove it on failure, or the
+# next build would find a cache, skip configuring, and run the build tool on a
+# tree with no build files ("ninja: error: loading 'build.ninja'").
 configure: ## Configure the CMake build tree (usage: make configure [BUILD_TYPE=Debug] [GENERATOR="Unix Makefiles"])
-	$(CMAKE) -S . -B $(BUILD_DIR) -G "$(GENERATOR)" $(if $(CMAKE_C_COMPILER),-DCMAKE_C_COMPILER=$(CMAKE_C_COMPILER)) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
+	$(CMAKE) -S . -B $(BUILD_DIR) -G "$(GENERATOR)" $(if $(CMAKE_C_COMPILER),-DCMAKE_C_COMPILER=$(CMAKE_C_COMPILER)) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
+		|| { rm -f $(BUILD_DIR)/CMakeCache.txt; exit 1; }
 
 # Configure once, on demand. CMake re-runs itself when CMakeLists.txt changes,
 # so only a change to BUILD_TYPE or GENERATOR needs an explicit `make configure`.

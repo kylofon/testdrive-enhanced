@@ -25,7 +25,7 @@ cmake --build build
 
 A `Makefile` wraps the same commands if you prefer: `make build`, `make check`, `make run`,
 `make clean`, and `make syntax` to compile-check the sources without linking. `make help`
-lists every target with its options.
+lists every target with its options. Git Bash has no `make`; use MSYS2's `mingw32-make`.
 
 ## Run
 
