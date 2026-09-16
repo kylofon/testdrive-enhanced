@@ -23,11 +23,17 @@ cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
+A `Makefile` wraps the same commands if you prefer: `make build`, `make check`, `make run`,
+`make clean`, and `make syntax` to compile-check the sources without linking. `make help`
+lists every target with its options.
+
 ## Run
 
 ```bash
 ./build/testdrive-enhanced.exe --game-dir Game
 ```
+
+Or `make run GAME_DIR=Game SCALE=3`.
 
 | Option | Meaning |
 |---|---|

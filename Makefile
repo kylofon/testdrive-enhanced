@@ -1,4 +1,5 @@
 # Makefile for Test Drive Enhanced — SDL3 C11 port of Test Drive (1987)
+# A thin wrapper over the CMake build; see README.md for the plain cmake commands.
 # Targets are numbered by pipeline stage:
 #   configure → 1 build → 2 check → 3 run → dev
 SERVICE = Test Drive Enhanced
@@ -8,28 +9,35 @@ BUILD_DIR = build
 BUILD_TYPE ?= Release
 GENERATOR ?= Ninja
 CMAKE = cmake
-CMAKE_C_COMPILER ?=
 GAME_DIR ?= Game
 SCALE ?=
 RES_SCALE ?=
 FRAME_RATE ?=
 ARGS ?=
-SDL_CFLAGS = $(shell pkg-config --cflags sdl3 2>/dev/null)
-SYNTAX_FLAGS = -std=c11 -Wall -Wextra -Wno-unused-parameter -fno-strict-aliasing -Isrc $(SDL_CFLAGS)
 
 ifeq ($(OS),Windows_NT)
 EXE = .exe
+# The README builds with the MSYS2 MinGW64 gcc; without this CMake may pick
+# another compiler that is on PATH.
+CMAKE_C_COMPILER ?= gcc
 else
 EXE =
+CMAKE_C_COMPILER ?=
 endif
 BIN = $(BUILD_DIR)/testdrive-enhanced$(EXE)
+
+# Include flags for the `syntax` target only (the real build gets these from
+# CMake). If SDL3 was found through its CMake config rather than pkg-config,
+# pass the headers yourself: make syntax SDL_CFLAGS=-I/c/msys64/mingw64/include
+SDL_CFLAGS := $(shell pkg-config --cflags sdl3 2>/dev/null)
+SYNTAX_FLAGS = -std=c11 -Wall -Wextra -Wno-unused-parameter -fno-strict-aliasing -Isrc $(SDL_CFLAGS)
 
 .PHONY: help configure build check run syntax clean
 
 # ── Environment ──────────────────────────────────────────────────────────────
 
 help: ## Print this help message
-	@printf '\033[01;32m${SERVICE} — SDL3 build, check and run\033[00;37m\n\n'
+	@printf '\033[01;32m$(SERVICE) — SDL3 build, check and run\033[00;37m\n\n'
 	@printf "\033[33mUsage:\033[0m\n  make [target] [arg=\"val\"...]\n\n\033[33mTargets:\033[0m\n"
 	@grep -E '^[-a-zA-Z0-9_\.\/]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; \
@@ -38,9 +46,14 @@ help: ## Print this help message
 configure: ## Configure the CMake build tree (usage: make configure [BUILD_TYPE=Debug] [GENERATOR="Unix Makefiles"])
 	$(CMAKE) -S . -B $(BUILD_DIR) -G "$(GENERATOR)" $(if $(CMAKE_C_COMPILER),-DCMAKE_C_COMPILER=$(CMAKE_C_COMPILER)) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 
+# Configure once, on demand. CMake re-runs itself when CMakeLists.txt changes,
+# so only a change to BUILD_TYPE or GENERATOR needs an explicit `make configure`.
+$(BUILD_DIR)/CMakeCache.txt:
+	@$(MAKE) --no-print-directory configure
+
 # ── Stage 1 · Build (CMake + Ninja) ──────────────────────────────────────────
 
-build: configure ## [STEP 1] Build the game binary (usage: make build [BUILD_TYPE=Debug])
+build: $(BUILD_DIR)/CMakeCache.txt ## [STEP 1] Build the game binary (usage: make build [BUILD_TYPE=Debug])
 	$(CMAKE) --build $(BUILD_DIR)
 
 # ── Stage 2 · Check (load TDEGA.EXE, no window) ──────────────────────────────
@@ -56,6 +69,14 @@ run: build ## [STEP 3] Run the game (usage: make run [GAME_DIR=Game] [SCALE=3] [
 # ── Development ───────────────────────────────────────────────────────────────
 
 syntax: ## Syntax-check sources without linking (usage: make syntax [FILE=src/host.c])
+	@if [ -z "$(SDL_CFLAGS)" ] && \
+	   ! printf '#include <SDL3/SDL.h>\n' | $(CC) -fsyntax-only -x c - >/dev/null 2>&1; then \
+		echo "error: SDL3 headers not found." >&2; \
+		echo "  pkg-config has no sdl3, and <SDL3/SDL.h> is not on the default include path." >&2; \
+		echo "  Install SDL3, set PKG_CONFIG_PATH, or point at the headers directly:" >&2; \
+		echo "    make syntax SDL_CFLAGS=-I/c/msys64/mingw64/include" >&2; \
+		exit 1; \
+	fi
 	@files="$${FILE:-$$(find src -name '*.c' | sort)}"; \
 	for f in $$files; do \
 		echo "  CC -fsyntax-only $$f"; \
