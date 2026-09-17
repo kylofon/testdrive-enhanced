@@ -6,6 +6,32 @@ SDL3. The game itself is the faithful C reimplementation from
 work as in the original. The view through the windscreen is redrawn at a higher resolution, further draw
 distance and 60 fps. It is not an emulator - the original data is not redistributed, and you need to get it yourself.
 
+## How to play (Windows)
+
+You need the files of the original DOS *Test Drive*. They are not included.
+
+1. Open the [latest release](https://github.com/kylofon/testdrive-enhanced/releases/latest) and download
+   `testdrive-enhanced-…-win64.zip`.
+2. Put your original game files in a folder named `Game`.
+3. Open the zip. Copy everything inside its `testdrive-enhanced-…-win64` folder into the folder that holds
+   `Game`, so that `testdrive-enhanced.exe` sits next to `Game`:
+
+   ```text
+   Test Drive\
+   ├── Game\                    <- your original game files (TDEGA.EXE, CARS.TXT, SCORES, ...)
+   ├── testdrive-enhanced.exe
+   ├── SDL3.dll
+   ├── libiconv-2.dll
+   └── (the other files from the zip)
+   ```
+
+4. Double-click `testdrive-enhanced.exe`.
+
+Keep the folder somewhere you can save files, such as Documents or the Desktop, not Program Files. The game
+saves its high scores in `Game`. If Windows says "Windows protected your PC", click **More info**, then
+**Run anyway**. Press Alt+Enter for fullscreen. The keys are listed under [Controls](#controls-from-the-original).
+If driving stutters on an older PC, see `--res-scale` under [Run](#run).
+
 ## Requirements
 
 * Your game files in a folder. The game needs `TDEGA.EXE`, `CARS.TXT`, `SCORES`, `TDSND.SND`, the `*.PES`
