@@ -1,0 +1,14 @@
+name: Mirror to SourceForge
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  call-mirror:
+    uses: kylofon/ci-workflows/.github/workflows/sourceforge-mirror.yml@master
+    with:
+      sf_project: testdrive-enhanced
+    secrets:
+      SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
