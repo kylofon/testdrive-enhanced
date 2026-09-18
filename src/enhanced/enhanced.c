@@ -40,6 +40,8 @@
 #define RIM_H     7.0               /* dark rim under the left road edge, road Y units */
 #define HILL_LEAN (150.0 / 180.0)   /* hillside under the left edge: 1:1 slope, screen px per px */
 #define CLIFF_LEAN (23.0 / 114.0)   /* slant of the rock face, screen px per px (the clfo sprite) */
+#define CLIFF_JAG 2.5               /* deepest notch in the rock face's edge, screen px */
+#define JAG_FOOT  6.0               /* notches fade in over this height from the road edge, screen px */
 #define ROAD_HW   67.5              /* road half-width in X units (10125 / 150) */
 #define Z_EPS     18.0f             /* sprite depth tolerance (a bit more than one road unit) */
 #define Z_INF     1e30f
@@ -60,6 +62,7 @@ static bool  *row_claimed;          /* RH: scanline already has its nearest road
 static int   *row_filled;           /* RH: pixels written on the scanline (each at most once) */
 static int   *row_suffix;           /* RH: columns [row_suffix, RW) of the scanline are all written */
 static u32   *sky;                  /* RH */
+static double *cliff_jag, *hill_jag;   /* RH: notch depth of the rock face's / hillside's edge, screen px */
 static float *far_top, *near_top, *snow;   /* RW: mountain outlines */
 static u32   *valley, *soft, *out;  /* OW x OH */
 static u8    cover[320 * 200];      /* 1 = show the EGA image */
@@ -355,14 +358,15 @@ static u32 cliff_tab[ZLUT_N];              /* cliff colour per haze step */
 
 static bool row_full(int r) { return row_filled[r] >= RW; }
 
-/* x range swept by an edge pair slanted by `lean` between scanlines r0 and r1 (for culling) */
-static bool strip_offscreen(double ax, double ay, double bx, double by, double lean, int r0, int r1)
+/* x range swept by an edge pair slanted by `lean` between scanlines r0 and r1 (for culling); the edges
+ * may lie up to `slack` px further right */
+static bool strip_offscreen(double ax, double ay, double bx, double by, double lean, double slack, int r0, int r1)
 {
     double y0 = row_y(r0), y1 = row_y(r1 - 1);
     double v[4] = { ax + lean * (ay - y0), ax + lean * (ay - y1), bx + lean * (by - y0), bx + lean * (by - y1) };
     double lo = v[0], hi = v[0];
     for (int i = 1; i < 4; i++) { if (v[i] < lo) lo = v[i]; if (v[i] > hi) hi = v[i]; }
-    return hi < 0 || lo > 320;
+    return hi + slack < 0 || lo > 320;
 }
 
 static void span(int r, double x0, double x1, u32 c, u8 m, float z)
@@ -410,19 +414,28 @@ static void road_surface(const Row *a, const Row *b, u8 cnt, u32 cliff, int b0, 
     }
 }
 
+/* Notch depth `jag` faded in over the first JAG_FOOT px away from the road edge (h px away) */
+static double jag_at(double jag, double h)
+{
+    return h <= 0 ? 0 : h >= JAG_FOOT ? jag : jag * smooth(h / JAG_FOOT);
+}
+
 /* The rock face above the right road edge between rows a (near) and b (far): the original's plain
  * colour-2 side, slanted like its cliff-edge sprite, up to the top of the window. The nearest face
- * also covers everything to its right. */
+ * also covers everything to its right. Every row's edge is notched by the same cliff_jag[] of the
+ * scanline (faded in above the road edge), so the outline is uneven like the sprite's and the strips
+ * still meet without gaps. */
 static void cliff_face(const Row *a, const Row *b, bool nearest, int b0, int b1)
 {
     double ax = a->sx + 1.25 * a->hw, bx = b->sx + 1.25 * b->hw;
     double iza = 1.0 / a->Z, izb = 1.0 / b->Z;
     int rmax = ss_row(a->sy > b->sy ? a->sy : b->sy);
     if (rmax > b1) rmax = b1;
-    if (rmax <= b0 || (!nearest && strip_offscreen(ax, a->sy, bx, b->sy, CLIFF_LEAN, b0, rmax))) return;
+    if (rmax <= b0 || (!nearest && strip_offscreen(ax, a->sy, bx, b->sy, CLIFF_LEAN, CLIFF_JAG, b0, rmax))) return;
     for (int r = rmax - 1; r >= b0; r--) {
         double yc = row_y(r);
-        double xa = ax + CLIFF_LEAN * (a->sy - yc), xb = bx + CLIFF_LEAN * (b->sy - yc);
+        double ha = a->sy - yc, hb = b->sy - yc, jag = cliff_jag[r];
+        double xa = ax + CLIFF_LEAN * ha + jag_at(jag, ha), xb = bx + CLIFF_LEAN * hb + jag_at(jag, hb);
         if (!nearest && xa > 320 && xb > 320) break;          /* only moves further right upwards */
         if (row_full(r)) continue;
         double dx = xb - xa;
@@ -457,21 +470,24 @@ static void cliff_face(const Row *a, const Row *b, bool nearest, int b0, int b1)
 
 /* Below the left road edge: a dark rim straight down, then the hillside falling away outwards to the
  * bottom of the window. On a straight road the hillside stays under the road; on left bends it
- * carries the far road. */
+ * carries the far road. The hillside's outer edge is notched like the rock face (hill_jag[]). */
 static void left_side(const Row *a, const Row *b, int b0, int b1)
 {
     double ax = a->sx - 1.25 * a->hw, bx = b->sx - 1.25 * b->hw;
     double iza = 1.0 / a->Z, izb = 1.0 / b->Z;
     int r0 = ss_row(a->sy < b->sy ? a->sy : b->sy);
     if (r0 < b0) r0 = b0;
-    if (r0 >= b1 || strip_offscreen(ax, a->sy, bx, b->sy, -HILL_LEAN, r0, b1)) return;
+    if (r0 >= b1 || strip_offscreen(ax, a->sy, bx, b->sy, -HILL_LEAN, CLIFF_JAG, r0, b1)) return;
     double zmin = a->Z < b->Z ? a->Z : b->Z;
     int rim_end = ss_row((a->sy > b->sy ? a->sy : b->sy) + 180.0 * RIM_H / zmin) + 1;
     for (int r = r0; r < b1; r++) {
         double yc = row_y(r);
-        double xa = ax - HILL_LEAN * (yc - a->sy), xb = bx - HILL_LEAN * (yc - b->sy);
+        double ha = yc - a->sy, hb = yc - b->sy, jag = hill_jag[r];
+        double xa = ax - HILL_LEAN * ha, xb = bx - HILL_LEAN * hb;
         bool rim = r < rim_end && fabs(bx - ax) > 1e-9;
-        if (!rim && xa < 0 && xb < 0) break;                  /* only moves further left downwards */
+        if (!rim && xa + CLIFF_JAG < 0 && xb + CLIFF_JAG < 0) break;   /* only moves further left downwards */
+        xa += jag_at(jag, ha);
+        xb += jag_at(jag, hb);
         if (row_full(r)) continue;
         const float *pz = zbuf + (size_t)r * RW;
         /* rim: vertical, between the unslanted edge points */
@@ -516,6 +532,14 @@ static void prepare_road(void)
 {
     cliff_colour = gfx_palette_rgb(10);             /* colour 2 of the road buffer on screen */
     for (int i = 0; i < ZLUT_N; i++) cliff_tab[i] = blend(cliff_colour, C_HAZE, haze_lut[i]);
+    /* Notches of the rock face's and the hillside's edges: small bumps with slight roughness in them,
+     * fixed to the screen like a distant outline. */
+    for (int r = 0; r < RH; r++) {
+        double y = row_y(r);
+        long n = 1L << 20;
+        cliff_jag[r] = CLIFF_JAG * (0.8 * noise1(y / 5.0, n, 0xC11FF) + 0.2 * noise1(y / 2.0, n, 0x5CA12));
+        hill_jag[r] = CLIFF_JAG * (0.85 * noise1(y / 12.0, n, 0x1B0A7) + 0.15 * noise1(y / 5.0, n, 0x7E3D5));
+    }
 }
 
 static void draw_road(int b0, int b1)
@@ -765,6 +789,7 @@ static void draw_item(const Item *it, int b0, int b1)
             if (sx >= s->w) sx = s->w - 1;
             const Lut *L = &it->lut[srow[sx]];
             if (!L->touch) continue;
+            if (it->base >= 0 && mat[p] == 4) continue;        /* cliff-foot pieces stay off the sky and valley */
             u8 m = (u8)((((it->base < 0 ? mat[p] : (u8)it->base) & L->a) | L->o) ^ L->x);
             mat[p] = m;
             col[p] = it->alpha >= 1.0f ? it->pal[m] : blend(col[p], it->pal[m], it->alpha);
@@ -776,7 +801,8 @@ static void draw_item(const Item *it, int b0, int b1)
  * pieces come in 4 scales drawn for W = 128 * (idx + 1); traffic comes in 5 scales (table offsets
  * 0, 8, .. 32) drawn for the half-widths in TRAFFIC_W. The original picks the scale from the row; here
  * the most detailed scale is used that is still drawn at LOD_MIN_K of its size or larger, so the
- * smaller sprites give way to the larger ones further away, and sprites are mostly scaled down. */
+ * smaller sprites give way to the larger ones further away, and sprites are mostly scaled down. Traffic
+ * never uses its smallest scale (offset 0). */
 #define LOD_MIN_K 0.5
 
 static int small_idx(double W)
@@ -800,9 +826,9 @@ static double traffic_k(double Z, u8 ts)
 static u8 traffic_scale(double Z)
 {
     double W = 10125.0 * 4.0 / Z;
-    for (int l = 4; l > 0; l--)
+    for (int l = 4; l > 1; l--)
         if (TRAFFIC_W[l] * LOD_MIN_K <= W) return (u8)(l * 8);
-    return 0;
+    return 8;                                  /* the smallest scale's heavy outline stands out too much */
 }
 
 static float fade_alpha(int j, u16 pos, double t, uint64_t now)
@@ -1005,6 +1031,8 @@ static bool ensure_buffers(void)
     row_filled = xrealloc(row_filled, (size_t)RH * sizeof *row_filled);
     row_suffix = xrealloc(row_suffix, (size_t)RH * sizeof *row_suffix);
     sky = xrealloc(sky, (size_t)RH * sizeof *sky);
+    cliff_jag = xrealloc(cliff_jag, (size_t)RH * sizeof *cliff_jag);
+    hill_jag = xrealloc(hill_jag, (size_t)RH * sizeof *hill_jag);
     mist = xrealloc(mist, (size_t)RH * sizeof *mist);
     far_top = xrealloc(far_top, (size_t)RW * sizeof *far_top);
     near_top = xrealloc(near_top, (size_t)RW * sizeof *near_top);
@@ -1012,8 +1040,9 @@ static bool ensure_buffers(void)
     valley = xrealloc(valley, op * sizeof *valley);
     soft = xrealloc(soft, op * sizeof *soft);
     out = xrealloc(out, op * sizeof *out);
-    if (!col || !mat || !zbuf || !row_claimed || !row_filled || !row_suffix || !sky || !far_top || !near_top
-        || !snow || !valley || !soft || !out) {
+    if (!col || !mat || !zbuf || !row_claimed || !row_filled || !row_suffix || !sky || !cliff_jag || !hill_jag
+        || !far_top
+        || !near_top || !snow || !valley || !soft || !out) {
         OK = 0;
         return false;
     }
