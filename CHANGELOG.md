@@ -2,20 +2,16 @@
 
 ## v1.0.3
 
-- Cars, signs, poles, roadside pieces and hazards are drawn with their most detailed sprite at every
-  distance, scaled down from reduced copies that keep small far sprites from sparkling instead of flickering
-  between pixels. `--sprite-detail auto` restores the previous behaviour, where the sprite size is chosen by
-  distance.
-- The rock face beside the road and the hillside under the left road edge have uneven, notched outlines
-  instead of straight edges, so they read as rock and earth rather than as flat shapes.
-- Smooth motion at speed: the simulation moves the car 12.5 times a second, and the road used to be drawn
-  at exactly those positions, so it jumped once per step and stood still in between. The car, the traffic
-  and the police car are now carried on between steps, and the road markings, roadside objects and the
-  scenery follow them.
-- The police car sat up to two road units away from where it should be, drifting against the road and
-  snapping back once per unit, most visible during a chase.
-- The stage clock is now Test Drive II's distance and time readout: miles left to the end of the stage
-  beside the clock, in its style.
+- Increased framerate for smooth gameplay.
+- Cars, signs, poles, roadside pieces and hazards always use their largest, most detailed sprite.
+- Far sprites no longer sparkle as they are scaled down.
+- Test Drive II's distance and time readout in the top right replaces the stage clock.
+- Minor scenery and police adjustments.
+
+### Parameters
+
+- `--sprite-detail max|auto`: sprite sizes, the most detailed everywhere (default) or chosen by distance.
+- `TD_ENH_STATS=1`: render and overlay times on stderr every 300 frames.
 
 ## v1.0.2
 

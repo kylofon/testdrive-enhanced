@@ -67,7 +67,7 @@ Or `make run GAME_DIR=Game SCALE=3`.
 | `--scale N` | Initial window size as a multiple of 320×240 (default 3) |
 | `--res-scale N` | Output resolution as a multiple of 320×200 (default 4 = 1280×800, range 1–8; lower it on slower CPUs) |
 | `--frame-rate FPS` | Drawing rate while driving (default 60, `0` = unpaced) |
-| `--sprite-detail max\|auto` | `max` (default): cars, signs and roadside objects always use their most detailed sprite, scaled to their size at every distance; `auto`: the sprite size chosen by distance |
+| `--sprite-detail max\|auto` | Sprite sizes: `max` (default) the most detailed sprite everywhere, `auto` chosen by distance |
 | `--bios-keys` | Original keyboard behaviour for driving: keys act only through key repeat (see below) |
 | `--check` | Verify `TDEGA.EXE` loads and exit, without opening a window |
 
@@ -88,19 +88,17 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 * **Resolution:** the road is drawn at 4× the original resolution by default, with smoothed edges. The cockpit,
   mirror and sprites keep their original pixel art, scaled up.
 * **Draw distance:** 120 road rows instead of 40. The road and cliffs get lighter and hazier in the distance.
-* **Smooth motion:** 60 fps instead of 8. The road moves continuously instead of one road unit at a time, and
-  steering drift is smoothed. The rows nearest the car keep straight edges.
+* **Smooth motion:** 60 fps instead of 8. The road, the traffic and the scenery move continuously instead of
+  stepping with the simulation, and steering drift is smoothed. The rows nearest the car keep straight edges.
 * **Horizon:** on the open side, a horizon below eye level with mountains above it and a valley floor below it
   that moves as you drive. A hillside falls away under the left road edge, so on left bends the far road sits
   on its own slope.
 * **Cliff:** the original's plain rock face, with the slant of its cliff-edge sprite, reaching the top of the
   window. Its outline is notched, like the hillside's on the open side. The grass mounds at its foot are
   always green. The original's colour depended on what was behind them.
-* **Objects:** signs, poles, traffic and the police car are scaled smoothly with distance. They always use
-  their largest, most detailed sprite, scaled down to their size at any distance without sparkling, as in
-  Test Drive II Enhanced (`--sprite-detail auto`: the sprite size chosen by distance, as in earlier
-  versions). Objects are hidden behind hill crests and the cliff, and traffic that appears in the distance
-  fades in.
+* **Objects:** signs, poles, traffic and the police car are scaled smoothly with distance and always use
+  their largest, most detailed sprite, without sparkling in the distance. They are hidden behind hill crests
+  and the cliff, and traffic that appears in the distance fades in.
 * **Distance and time** in the top right, in Test Drive II's style: miles left to the end of the stage and
   the stage clock, counting the same seconds the results screen shows.
 * **Kept from the original:** the mirror, dashboard, speeding ticket, "Pulling into…" messages, windscreen

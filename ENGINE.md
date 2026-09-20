@@ -96,6 +96,10 @@ cmake --build build
 ./build/testdrive-enhanced.exe --game-dir Game --check
 ```
 
+`TD_ENH_STATS=1` prints the enhanced renderer's timings on stderr every 300 frames: render and overlay
+times and the rate the frames were actually produced at (the stage loop asks for `--frame-rate`, but a frame
+that takes longer than its period pushes the next one back).
+
 Files must **compile without warnings**. Check a single file with
 `gcc -std=c11 -Wall -Wextra -Wno-unused-parameter -fno-strict-aliasing -fsyntax-only -Isrc -I/c/msys64/mingw64/include src/<file>.c`.
 You may write throwaway verification scripts in your scratch area. Do not create HTML pages.
