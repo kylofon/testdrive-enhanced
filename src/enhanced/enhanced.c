@@ -12,7 +12,8 @@
  *   - a sky with mountains and a valley floor below a lowered horizon on the open side, the original's
  *     slanted rock face on the other side and a hillside under the left road edge;
  *   - the original sprites decoded from their plane data and scaled with distance;
- *   - stage clock (top right), 8 Hz emulation of the frame-counted gear-box delay, own crash sequence.
+ *   - Test Drive II's distance and time readout (top right), 8 Hz emulation of the frame-counted gear-box
+ *     delay, own crash sequence.
  * Pixels that the original draws over the road window are left to the EGA image: the mirror, the
  * ticket and the status text (computed coverage) and anything drawn on screen after the road buffer
  * was presented (VRAM compared against a snapshot taken at that moment).
@@ -24,6 +25,7 @@
 #include "../platform/gfx.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -183,6 +185,7 @@ static double   sm_carx, sm_head;          /* smoothed car_x/8 and view heading 
 static bool     sm_valid;
 static uint64_t last_ns;
 static u16      world_pos;                 /* road unit up to which world_* is integrated */
+static u16      stage_end;                 /* road unit at which the stage ends (sim_lookahead finds its 0xFF) */
 static double   world_head;                /* road direction, degrees (loops; only used for scenery) */
 static double   world_x, world_z;          /* road position in Z units */
 static double   view_deg;                  /* camera direction, degrees */
@@ -192,6 +195,47 @@ static bool     emu_frame;                 /* an emulated 8 Hz frame elapsed thi
 
 typedef struct { u16 pos; uint64_t since; bool fade; } SlotFade;
 static SlotFade fades[10];
+
+/* Extrapolation between simulation steps. The simulation moves the car 12.5 times a second (sim.c: the
+ * 100 Hz driving ISR steps on every eighth tick), so the snapshot the renderer reads only changes that
+ * often; drawn straight, the road jumps once per step and stands still in between. Every moving thing is
+ * therefore carried on from the last step by the fraction of a step that has elapsed, using the distance
+ * it covered over the step before (step_alpha, Track.ds), and the jump is spread over the frames. */
+#define SIM_STEP_NS 80000000.0                 /* one 12.5 Hz simulation step */
+
+typedef struct { bool valid; u16 pos; s16 sub; double ds; } Track;   /* ds: units advanced last step */
+
+static Track trk_player, trk_car[10], trk_cop;
+static double step_alpha;                  /* progress through the current step, 0..1 */
+static uint64_t step_ns;                   /* when the current step was first seen */
+static double view_ahead;                  /* the camera's extrapolation, in units, against base_pos + frac
+                                            * built from the raw snapshot (negative once a unit was carried) */
+static int pos_carry;                      /* whole units the extrapolation is ahead of the simulation */
+
+static void track_reset(void)
+{
+    trk_player.valid = false;
+    trk_cop.valid = false;
+    for (int j = 0; j < 10; j++) trk_car[j].valid = false;
+    step_alpha = 0;
+    step_ns = 0;
+}
+
+/* Advance of (pos, sub) over the last step, in road units. sub counts down from 89 within a unit. */
+static void track_step(Track *k, u16 pos, s16 sub)
+{
+    if (!k->valid) {
+        *k = (Track){ true, pos, sub, 0.0 };
+        return;
+    }
+    double d = (double)(s16)(u16)(pos - k->pos) + (k->sub - sub) / 90.0;
+    k->ds = d < 0 || d > 8 ? 0.0 : d;        /* a reset or a slot reused: no extrapolation */
+    k->pos = pos;
+    k->sub = sub;
+}
+
+/* How far the thing tracked by k has moved since its step, in road units. */
+static double track_ahead(const Track *k) { return k->valid ? step_alpha * k->ds : 0.0; }
 
 typedef struct { s16 x0, y0, x1, y1; } Crack;
 static Crack cracks[128];
@@ -242,14 +286,43 @@ static void update_view(void)
 
     base_pos = DSW(DS_r_road_ptr);
     s16 sub = DSS(DS_r_subpos);
-    frac = (89.0 - sub) / 90.0;
+    /* a snapshot that differs from the last one is a new simulation step: note when it arrived and how far
+     * everything moved over the step before it */
+    if (!trk_player.valid || base_pos != trk_player.pos || sub != trk_player.sub) {
+        track_step(&trk_player, base_pos, sub);
+        for (int j = 0; j < 10; j++) {
+            u16 si = (u16)(DS_r_traffic_slots + 8 * j);
+            u16 p = DSW(si);
+            if (p == 0) trk_car[j].valid = false;
+            else track_step(&trk_car[j], p, DSS((u16)(si + 2)));
+        }
+        u8 cst = DSB(DS_r_cop_state);
+        if (cst == 0 || cst == 7) trk_cop.valid = false;
+        else track_step(&trk_cop, DSW(DS_r_cop_pos), DSS(DS_r_cop_sub));
+        step_ns = now;
+    }
+    step_alpha = step_ns && now > step_ns ? (double)(now - step_ns) / SIM_STEP_NS : 0.0;
+    if (step_alpha > 1) step_alpha = 1;                    /* a late step: wait for it rather than overshoot */
+
+    u16 raw_pos = base_pos;                                /* the unit the simulation is in */
+    frac = (89.0 - sub) / 90.0 + track_ahead(&trk_player);
+    view_ahead = track_ahead(&trk_player);
+    pos_carry = 0;
+    while (frac >= 1.0) {                                  /* the extrapolation crossed into the next unit */
+        base_pos++;
+        pos_carry++;
+        frac -= 1.0;
+        view_ahead -= 1.0;
+    }
     if (frac < 0) frac = 0;
     if (frac > 0.999) frac = 0.999;
 
-    /* world direction/position along the road, for scenery parallax */
-    s16 adv = (s16)(u16)(base_pos - world_pos);
-    if (adv < 0 || adv > 400) world_pos = base_pos;
-    while (world_pos != base_pos) {
+    /* World direction/position along the road, for scenery parallax. Only the simulation's own units are
+     * integrated into world_*: a unit the extrapolation crossed is carried in the local copy below, because
+     * the next step may still be in the unit before it and world_* must not walk backwards. */
+    s16 adv = (s16)(u16)(raw_pos - world_pos);
+    if (adv < 0 || adv > 400) world_pos = raw_pos;
+    while (world_pos != raw_pos) {
         bool e = false;
         u8 b = road_rec(world_pos, &e);
         world_head += (s8)REC(b, 1) * 64.0 / 256.0;
@@ -258,13 +331,22 @@ static void update_view(void)
         world_z += 15.0 * cos(a);
         world_pos++;
     }
+    double head = world_head, wx = world_x, wz = world_z;
+    for (int i = 0; i < pos_carry; i++) {
+        bool e = false;
+        u8 b = road_rec((u16)(raw_pos + i), &e);
+        head += (s8)REC(b, 1) * 64.0 / 256.0;
+        double a = head * M_PI / 180.0;
+        wx += 15.0 * sin(a);
+        wz += 15.0 * cos(a);
+    }
     bool e = false;
     u8 b1 = road_rec(base_pos, &e);
     double c1 = (s8)REC(b1, 1) * 64.0 / 256.0;
-    double a = (world_head + frac * c1) * M_PI / 180.0;
-    cam_x = world_x + frac * 15.0 * sin(a);
-    cam_z = world_z + frac * 15.0 * cos(a);
-    view_deg = world_head + frac * c1 - sm_head / 256.0;
+    double a = (head + frac * c1) * M_PI / 180.0;
+    cam_x = wx + frac * 15.0 * sin(a);
+    cam_z = wz + frac * 15.0 * cos(a);
+    view_deg = head + frac * c1 - sm_head / 256.0;
 
     if (now >= emu_next_ns) {
         emu_frame = true;
@@ -281,7 +363,10 @@ static void update_view(void)
 static void walk_road(void)
 {
     bool ended = false, e0 = false;
-    u8 phase = DSB(DS_road_anim_counter);
+    /* The counter steps once per road unit (sim.c: sim_advance_unit), so a unit the extrapolation crossed
+     * has to be added here; otherwise the dashes, poles and roadside pieces, which are keyed to it, would
+     * sit one unit out until the simulation caught up and then snap back. */
+    u8 phase = (u8)(DSB(DS_road_anim_counter) + pos_carry);
     u8 b1 = road_rec(base_pos, &e0);
     double head = sm_head - frac * (s8)REC(b1, 1) * 64.0;
     double slope = -frac * (s8)REC(b1, 2) * 4.0;
@@ -644,11 +729,18 @@ static void draw_background(int b0, int b1)
 /* ------------------------------------------------------------------------------------------------ */
 /* sprites                                                                                          */
 
+#define SPR_MIPS 6
+
 typedef struct {
     u16 seg, off;
     int w, h, hx, hy, ox, oy;
     u8 pm[4], nst;
     u8 *bits;                              /* per pixel: bit k = stored plane k */
+    /* reduced copies for strong downscaling: level L (1..nmip) has texels of 2^L x 2^L source pixels, each
+     * the most frequent pattern that changes something under op and the share of such pixels (0..255) */
+    int nmip;
+    int mip_w[SPR_MIPS + 1], mip_h[SPR_MIPS + 1], mip_off[SPR_MIPS + 1];
+    u8 *mip[4];                            /* [op]: pattern, coverage pairs of all levels */
 } Spr;
 
 #define SPR_CACHE 400
@@ -657,9 +749,14 @@ static int ncache;
 
 static void cache_clear(void)
 {
-    for (int i = 0; i < ncache; i++) free(cache[i].bits);
+    for (int i = 0; i < ncache; i++) {
+        free(cache[i].bits);
+        for (int op = 0; op < 4; op++) free(cache[i].mip[op]);
+    }
     ncache = 0;
 }
+
+static void build_mips(Spr *s);
 
 static const Spr *spr_get(FarPtr p)
 {
@@ -680,6 +777,8 @@ static const Spr *spr_get(FarPtr p)
     while (s->nst < 4 && (s->pm[s->nst] & 0x0F)) s->nst++;
     u16 block = (u16)(h * wb + (s->pm[3] >> 4));
     s->bits = calloc((size_t)s->w * h, 1);
+    s->nmip = 0;
+    for (int op = 0; op < 4; op++) s->mip[op] = NULL;
     if (!s->bits) return NULL;
     for (int k = 0; k < s->nst; k++) {
         u16 src = (u16)(p.off + 0x10 + k * block);
@@ -688,6 +787,7 @@ static const Spr *spr_get(FarPtr p)
                 if (rd8(p.seg, (u16)(src + y * wb + (x >> 3))) & (0x80 >> (x & 7)))
                     s->bits[y * s->w + x] |= (u8)(1 << k);
     }
+    build_mips(s);
     ncache++;
     return s;
 }
@@ -721,6 +821,55 @@ static void make_lut(const Spr *s, int op, Lut lut[16])
         lut[v] = L;
     }
 }
+
+/* Reduced copies of a sprite for each operation (the samples hold colour indices for the operations that
+ * follow, so texels cannot be averaged): a texel of level L covers 2^L x 2^L source pixels and holds the
+ * most frequent of their patterns that change something under the operation, and the share of such pixels.
+ * Drawn with that share as a dithered coverage, a sprite scaled far down keeps its average shape and colour
+ * from frame to frame instead of sparkling between the source pixels a sample happens to hit. */
+static void build_mips(Spr *s)
+{
+    int n = 0, off = 0;
+    for (int L = 1; L <= SPR_MIPS; L++) {
+        int w = (s->w + (1 << L) - 1) >> L, h = (s->h + (1 << L) - 1) >> L;
+        s->mip_w[L] = w;
+        s->mip_h[L] = h;
+        s->mip_off[L] = off;
+        off += w * h;
+        n = L;
+        if (w <= 1 && h <= 1) break;
+    }
+    s->nmip = n;
+    for (int op = 0; op < 4; op++) {
+        u8 *m = malloc((size_t)off * 2);
+        s->mip[op] = m;
+        if (!m) { s->nmip = 0; continue; }
+        Lut lut[16];
+        make_lut(s, op, lut);
+        for (int L = 1; L <= n; L++) {
+            int bs = 1 << L;
+            for (int ty = 0; ty < s->mip_h[L]; ty++)
+                for (int tx = 0; tx < s->mip_w[L]; tx++) {
+                    int cnt[16] = { 0 }, area = 0, hit = 0;
+                    for (int y = ty * bs; y < ty * bs + bs && y < s->h; y++)
+                        for (int x = tx * bs; x < tx * bs + bs && x < s->w; x++) {
+                            u8 v = s->bits[y * s->w + x];
+                            area++;
+                            if (lut[v].touch) { cnt[v]++; hit++; }
+                        }
+                    int best = 0;
+                    for (int v = 1; v < 16; v++) if (cnt[v] > cnt[best]) best = v;
+                    u8 *t = m + 2 * (s->mip_off[L] + ty * s->mip_w[L] + tx);
+                    t[0] = (u8)(hit ? best : 0);
+                    t[1] = (u8)(area ? (hit * 255 + area / 2) / area : 0);
+                }
+        }
+    }
+}
+
+static const u8 BAYER[4][4] = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } };
+
+static bool dither_pass(float cov, int c, int r) { return (float)BAYER[r & 3][c & 3] + 0.5f < cov * 16.0f; }
 
 typedef struct {
     const Spr *s;
@@ -775,6 +924,33 @@ static void draw_item(const Item *it, int b0, int b1)
 
     float zt = (float)it->z - Z_EPS;
     double inv = 1.0 / (k * Q);
+    /* source pixels per output pixel: from two on, the reduced copy whose texels are about that size */
+    int L = 0;
+    for (double px = 1.0 / (k * OK); L < s->nmip && px >= (double)(2 << L); ) L++;
+    if (L > 0 && s->mip[it->op]) {
+        const u8 *m = s->mip[it->op] + 2 * s->mip_off[L];
+        int mw = s->mip_w[L], mh = s->mip_h[L];
+        for (int r = r0; r < r1; r++) {
+            int sy = (int)floor((r + 0.5 + (WIN_Y0 - y0) * Q) * inv);
+            sy = (sy < 0 ? 0 : sy >= s->h ? s->h - 1 : sy) >> L;
+            const u8 *mrow = m + 2 * (size_t)(sy < mh ? sy : mh - 1) * mw;
+            size_t row = (size_t)r * RW;
+            for (int c = c0; c < c1; c++) {
+                size_t p = row + c;
+                if (zbuf[p] < zt) continue;
+                int sx = (int)floor((c + 0.5 - x0 * Q) * inv);
+                sx = (sx < 0 ? 0 : sx >= s->w ? s->w - 1 : sx) >> L;
+                const u8 *e = mrow + 2 * (sx < mw ? sx : mw - 1);
+                if (!e[1] || (e[1] < 255 && !dither_pass(e[1] * (1.0f / 255.0f), c, r))) continue;
+                const Lut *T = &it->lut[e[0]];
+                if (it->base >= 0 && mat[p] == 4) continue;
+                u8 m2 = (u8)((((it->base < 0 ? mat[p] : (u8)it->base) & T->a) | T->o) ^ T->x);
+                mat[p] = m2;
+                col[p] = it->alpha >= 1.0f ? it->pal[m2] : blend(col[p], it->pal[m2], it->alpha);
+            }
+        }
+        return;
+    }
     for (int r = r0; r < r1; r++) {
         int sy = (int)floor((r + 0.5 + (WIN_Y0 - y0) * Q) * inv);
         if (sy < 0) sy = 0;
@@ -799,14 +975,18 @@ static void draw_item(const Item *it, int b0, int b1)
 
 /* Size classes (W = quarter-pixel road half-width at the object). Poles, posts, signs and roadside
  * pieces come in 4 scales drawn for W = 128 * (idx + 1); traffic comes in 5 scales (table offsets
- * 0, 8, .. 32) drawn for the half-widths in TRAFFIC_W. The original picks the scale from the row; here
- * the most detailed scale is used that is still drawn at LOD_MIN_K of its size or larger, so the
- * smaller sprites give way to the larger ones further away, and sprites are mostly scaled down. Traffic
- * never uses its smallest scale (offset 0). */
+ * 0, 8, .. 32) drawn for the half-widths in TRAFFIC_W. The original picks the scale from the row. With
+ * --sprite-detail max every object uses its largest, most detailed scale at every distance, scaled down
+ * from the reduced copies (build_mips). With auto the most detailed scale is used that is still drawn at
+ * LOD_MIN_K of its size or larger, so the smaller sprites give way to the larger ones further away, and
+ * sprites are mostly scaled down; traffic never uses its smallest scale (offset 0). */
 #define LOD_MIN_K 0.5
+
+bool enh_sprite_detail_max = true;
 
 static int small_idx(double W)
 {
+    if (enh_sprite_detail_max) return 3;
     for (int idx = 3; idx > 0; idx--)
         if (128.0 * (idx + 1) * LOD_MIN_K <= W) return idx;
     return 0;
@@ -817,6 +997,8 @@ static double small_k(double W, int idx)
     return k > 1.6 ? 1.6 : k;
 }
 static const double TRAFFIC_W[5] = { 65, 129, 198, 300, 461 };
+#define TRAFFIC_TOP 32                         /* table offset of the largest traffic scale */
+
 static double traffic_k(double Z, u8 ts)
 {
     double k = (10125.0 * 4.0 / Z) / TRAFFIC_W[ts / 8];
@@ -825,6 +1007,7 @@ static double traffic_k(double Z, u8 ts)
 
 static u8 traffic_scale(double Z)
 {
+    if (enh_sprite_detail_max) return TRAFFIC_TOP;
     double W = 10125.0 * 4.0 / Z;
     for (int l = 4; l > 1; l--)
         if (TRAFFIC_W[l] * LOD_MIN_K <= W) return (u8)(l * 8);
@@ -892,7 +1075,8 @@ static void collect_objects(void)
         u16 si = (u16)(DS_r_traffic_slots + 8 * j);
         u16 pos = DSW(si);
         if (pos == 0) { fades[j].pos = 0; continue; }
-        double t = (s16)(u16)(pos - base_pos) + (subpos - DSS((u16)(si + 2))) / 90.0;
+        double t = (s16)(u16)(pos - base_pos) + (subpos - DSS((u16)(si + 2))) / 90.0
+                   + track_ahead(&trk_car[j]) - view_ahead;      /* both carried on from the last step */
         double X, Y, Z;
         if (t < 0.4 || !sample_road(t, &X, &Y, &Z)) continue;
         double Xl = X + (j < 5 ? -ROAD_HW / 2 : ROAD_HW / 2);
@@ -908,7 +1092,10 @@ static void collect_objects(void)
     /* police car ahead */
     u8 cs = DSB(DS_r_cop_state);
     if (cs != 0 && cs != 7) {
-        double t = (s16)(u16)(DSW(DS_r_cop_pos) - base_pos) + (DSS(DS_r_cop_sub) - subpos) / 90.0;
+        /* cop_sub counts down within the unit like the player's sub_unit (sim.c: cop_adv), so the
+         * sub-unit term has the same sign as the traffic cars' above */
+        double t = (s16)(u16)(DSW(DS_r_cop_pos) - base_pos) + (subpos - DSS(DS_r_cop_sub)) / 90.0
+                   + track_ahead(&trk_cop) - view_ahead;
         double X, Y, Z;
         if (t >= 0.4 && sample_road(t, &X, &Y, &Z)) {
             double Xc = X + ROAD_HW / 2 - DSS(DS_r_cop_lane) * ROAD_HW / 16.0;
@@ -922,7 +1109,7 @@ static void collect_objects(void)
                 add_item((u16)(e + 0x2C), OP_AND, 1, 1, false, x, y, k, Z, 1.0f);
                 add_item((u16)(e + 0x28), OP_OR, 1, 1, false, x, y, k, Z, 1.0f);
             }
-            if (ts == 32) {
+            if (ts == TRAFFIC_TOP) {           /* the original adds it to the largest scale (always, with max) */
                 add_item(0x137F, OP_AND, 1, 2, false, x, y, k, Z, 1.0f);
                 add_item(0x137B, OP_OR, 1, 2, false, x, y, k, Z, 1.0f);
             }
@@ -1003,6 +1190,35 @@ static void sharpen_rows(int o0, int o1)
 
 /* ------------------------------------------------------------------------------------------------ */
 /* frame orchestration                                                                              */
+
+/* TD_ENH_STATS=1: render and overlay times on stderr every STATS_EVERY frames, with the rate the frames
+ * were actually produced at (the stage loop asks for --frame-rate, but a frame that takes longer than its
+ * period pushes the next one back). */
+#define STATS_EVERY 300
+
+static bool stats_on;
+static int stats_frames;
+static double stats_render_ms, stats_render_max, stats_overlay_ms;
+static uint64_t stats_since_ns;
+
+static void stats_add(double *acc, uint64_t t0)
+{
+    if (stats_on) *acc += (double)(host_time_ns() - t0) / 1e6;
+}
+
+static void stats_report(void)
+{
+    uint64_t now = host_time_ns();
+    if (!stats_since_ns) stats_since_ns = now;
+    if (++stats_frames < STATS_EVERY) return;
+    double secs = (double)(now - stats_since_ns) / 1e9;
+    fprintf(stderr, "enh: render %.1f ms avg, %.1f ms max; overlay %.1f ms avg; %d frames in %.1f s = %.1f fps\n",
+            stats_render_ms / stats_frames, stats_render_max, stats_overlay_ms / stats_frames, stats_frames,
+            secs, secs > 0 ? stats_frames / secs : 0.0);
+    stats_frames = 0;
+    stats_render_ms = stats_render_max = stats_overlay_ms = 0;
+    stats_since_ns = now;
+}
 
 static void *xrealloc(void *p, size_t n)
 {
@@ -1122,14 +1338,23 @@ static void update_cover(void)
     for (int k = 0; k < 4; k++) memcpy(vram_snap[k], gfx_ega_plane(k) + WIN_Y0 * 40, sizeof vram_snap[k]);
 }
 
-static const u8 DIGITS[11][7] = {
-    { 0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E }, { 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E },
-    { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F }, { 0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E },
-    { 0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02 }, { 0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E },
-    { 0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E }, { 0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08 },
-    { 0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E }, { 0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C },
-    { 0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00 },
+/* Test Drive II's distance and time readout (its ROAD.PES dgt0..9 and <car>DASH.PES "time" sprites, at the
+ * positions most of its cars' .BIN files give): miles to the end of the stage in tenths and the stage clock,
+ * light blue, "MILES" and the separators light green, in a red frame on black. */
+static const u8 TD2_DIGITS[10][5] = {
+    { 0xF, 0x9, 0x9, 0x9, 0xF }, { 0x1, 0x1, 0x1, 0x1, 0x1 }, { 0xF, 0x1, 0xF, 0x8, 0xF },
+    { 0xF, 0x1, 0xF, 0x1, 0xF }, { 0x9, 0x9, 0xF, 0x1, 0x1 }, { 0xF, 0x8, 0xF, 0x1, 0xF },
+    { 0x8, 0x8, 0xF, 0x9, 0xF }, { 0xF, 0x1, 0x1, 0x1, 0x1 }, { 0xF, 0x9, 0xF, 0x9, 0xF },
+    { 0xF, 0x9, 0xF, 0x1, 0x1 },
 };
+static const char *const TD2_TIME[5] = {                  /* the "time" sprite at (248, 3) */
+    "                      ##### # #   ### ###                 ",
+    "                      # # # # #   #   #                  #",
+    "                      # # # # #   ### ###                 ",
+    "                      # # # # #   #     #                #",
+    "              #       # # # # ### ### ###                 ",
+};
+#define TD2_UNITS_PER_TENTH 48                            /* 480 road units a mile (the results' 0x5A / 12 Hz) */
 
 /* k x k block at original coordinates (x, y) */
 static void block(u32 *px, int k, int x, int y, u32 c)
@@ -1138,28 +1363,37 @@ static void block(u32 *px, int k, int x, int y, u32 c)
         for (int i = 0; i < k; i++) px[(size_t)(y * k + j) * 320 * k + x * k + i] = c;
 }
 
+static void td2_digit(u32 *px, int k, int x, int d)
+{
+    for (int y = 0; y < 5; y++)
+        for (int i = 0; i < 4; i++)
+            if (TD2_DIGITS[d][y] & (8 >> i)) block(px, k, x + 1 + i, 3 + y, 0x5555FF);
+}
+
 static void draw_timer(u32 *px, int k)
 {
-    u16 secs = (u16)(DSW(DS_g_stageTime) / 12);          /* the results screen's seconds */
-    char s[8];
-    int mm = secs / 60 > 99 ? 99 : secs / 60;
-    s[0] = (char)('0' + mm / 10); s[1] = (char)('0' + mm % 10); s[2] = ':';
-    s[3] = (char)('0' + (secs % 60) / 10); s[4] = (char)('0' + (secs % 60) % 10);
-    const int n = 5, cw = 6, x0 = 314 - (n * cw - 1), y0 = 6;
-    for (int y = (y0 - 3) * k; y < (y0 + 10) * k; y++)
-        for (int x = (x0 - 4) * k; x < (x0 + n * cw + 3) * k; x++) {
-            bool corner = (y < (y0 - 2) * k || y >= (y0 + 9) * k) && (x < (x0 - 3) * k || x >= (x0 + n * cw + 2) * k);
-            if (!corner) px[(size_t)y * 320 * k + x] = blend(px[(size_t)y * 320 * k + x], 0x000000, 0.62f);
+    for (int y = 0; y <= 10; y++)
+        for (int x = 246; x <= 319; x++) {
+            bool frame = x >= 247 && x <= 318 && y >= 1 && y <= 9 && (x == 247 || x == 318 || y == 1 || y == 9);
+            block(px, k, x, y, frame ? 0xAA0000 : 0x000000);
         }
-    for (int i = 0; i < n; i++) {
-        const u8 *g = DIGITS[s[i] == ':' ? 10 : s[i] - '0'];
-        for (int y = 0; y < 7; y++)
-            for (int x = 0; x < 5; x++)
-                if (g[y] & (0x10 >> x)) {
-                    block(px, k, x0 + i * cw + x + 1, y0 + y + 1, 0x202020);
-                    block(px, k, x0 + i * cw + x, y0 + y, 0xFFE680);
-                }
-    }
+    for (int y = 0; y < 5; y++)
+        for (int x = 0; TD2_TIME[y][x]; x++)
+            if (TD2_TIME[y][x] == '#') block(px, k, 248 + x, 3 + y, 0x55FF55);
+
+    int left = (int)stage_end - (int)DSW(DS_road_pos);
+    int tenths = left > 0 ? left / TD2_UNITS_PER_TENTH : 0;
+    if (tenths > 999) tenths = 999;
+    td2_digit(px, k, 251, tenths / 100);
+    td2_digit(px, k, 256, tenths / 10 % 10);
+    td2_digit(px, k, 263, tenths % 10);
+
+    int secs = DSW(DS_g_stageTime) / 12;                  /* the results screen's seconds */
+    int mm = secs / 60 > 99 ? 99 : secs / 60;
+    td2_digit(px, k, 294, mm / 10);
+    td2_digit(px, k, 299, mm % 10);
+    td2_digit(px, k, 306, secs % 60 / 10);
+    td2_digit(px, k, 311, secs % 60 % 10);
 }
 
 /* Crack lines at output resolution, about half an original pixel wide. */
@@ -1196,6 +1430,7 @@ static bool ov_dirty(void)
 static void ov_draw(u32 *px, int k)
 {
     if (!active || k != OK) return;
+    uint64_t t0 = host_time_ns();
     for (int y = WIN_Y0; y < WIN_Y1; y++) {
         const u8 *p0 = gfx_ega_plane(0) + y * 40, *p1 = gfx_ega_plane(1) + y * 40;
         const u8 *p2 = gfx_ega_plane(2) + y * 40, *p3 = gfx_ega_plane(3) + y * 40;
@@ -1216,6 +1451,7 @@ static void ov_draw(u32 *px, int k)
     }
     draw_cracks(px, k);
     draw_timer(px, k);
+    stats_add(&stats_overlay_ms, t0);
 }
 
 /* ------------------------------------------------------------------------------------------------ */
@@ -1224,6 +1460,7 @@ static void ov_draw(u32 *px, int k)
 void enh_init(void)
 {
     init_luts();
+    stats_on = getenv("TD_ENH_STATS") != NULL;
     gfx_set_overlay(ov_dirty, ov_draw);
 }
 
@@ -1234,8 +1471,12 @@ void enh_stage_begin(void)
     sm_valid = false;
     last_ns = 0;
     world_pos = DSW(DS_road_pos);
+    stage_end = world_pos;                                /* the first end marker 0x28 units ahead, as 0x4241 */
+    for (u32 u = (u32)world_pos + 0x28; u <= 0xFFFF; u++)
+        if (DSB((u16)u) == 0xFF) { stage_end = (u16)(u - 0x28); break; }
     world_head = world_x = world_z = 0;
     emu_next_ns = 0;
+    track_reset();
     ncracks = 0;
     memset(fades, 0, sizeof fades);
     dirty = true;
@@ -1254,11 +1495,13 @@ void enh_life_reset(void)
     sm_valid = false;
     ncracks = 0;
     memset(fades, 0, sizeof fades);
+    track_reset();
 }
 
 void enh_frame(void)
 {
     if (!ensure_buffers()) return;
+    uint64_t t0 = host_time_ns();
     update_view();
     walk_road();
     prepare_road();
@@ -1271,6 +1514,12 @@ void enh_frame(void)
     update_cover();
     active = true;
     dirty = true;
+    if (stats_on) {
+        double ms = (double)(host_time_ns() - t0) / 1e6;
+        stats_render_ms += ms;
+        if (ms > stats_render_max) stats_render_max = ms;
+        stats_report();
+    }
 }
 
 void enh_gear_box(void)

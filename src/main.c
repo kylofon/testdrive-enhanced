@@ -1,8 +1,11 @@
 /* Test Drive Enhanced — entry point.
  *
- * usage: testdrive-enhanced [--game-dir DIR] [--scale N] [--res-scale N] [--frame-rate FPS] [--bios-keys] [--check]
+ * usage: testdrive-enhanced [--game-dir DIR] [--scale N] [--res-scale N] [--frame-rate FPS]
+ *                           [--sprite-detail max|auto] [--bios-keys] [--check]
  *   --res-scale  output resolution as a multiple of 320x200 (default 4, 1..8)
  *   --frame-rate drawing rate while driving (default 60; 0 = as fast as possible)
+ *   --sprite-detail max (default): the most detailed sprite of every car and object at every distance;
+ *                auto: the sprite scale chosen by distance
  *   --bios-keys driving keys act only through key repeat, exactly like the original (default: held keys)
  *   --game-dir  folder with the original game files (default: "Game" next to the working directory)
  *   --scale     initial window scale (default 3)
@@ -34,8 +37,11 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--check")) check = true;
         else if (!strcmp(argv[i], "--bios-keys")) host_set_held_keys(false);
         else if (!strcmp(argv[i], "--frame-rate") && i + 1 < argc) { host_set_frame_rate(atoi(argv[++i])); rate_set = true; }
+        else if (!strcmp(argv[i], "--sprite-detail") && i + 1 < argc && !strcmp(argv[i + 1], "max")) { enh_sprite_detail_max = true; i++; }
+        else if (!strcmp(argv[i], "--sprite-detail") && i + 1 < argc && !strcmp(argv[i + 1], "auto")) { enh_sprite_detail_max = false; i++; }
         else {
-            fprintf(stderr, "usage: %s [--game-dir DIR] [--scale N] [--res-scale N] [--frame-rate FPS] [--bios-keys] [--check]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--game-dir DIR] [--scale N] [--res-scale N] [--frame-rate FPS] "
+                            "[--sprite-detail max|auto] [--bios-keys] [--check]\n", argv[0]);
             return 2;
         }
     }

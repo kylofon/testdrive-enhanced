@@ -67,6 +67,7 @@ Or `make run GAME_DIR=Game SCALE=3`.
 | `--scale N` | Initial window size as a multiple of 320×240 (default 3) |
 | `--res-scale N` | Output resolution as a multiple of 320×200 (default 4 = 1280×800, range 1–8; lower it on slower CPUs) |
 | `--frame-rate FPS` | Drawing rate while driving (default 60, `0` = unpaced) |
+| `--sprite-detail max\|auto` | `max` (default): cars, signs and roadside objects always use their most detailed sprite, scaled to their size at every distance; `auto`: the sprite size chosen by distance |
 | `--bios-keys` | Original keyboard behaviour for driving: keys act only through key repeat (see below) |
 | `--check` | Verify `TDEGA.EXE` loads and exit, without opening a window |
 
@@ -93,11 +94,15 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
   that moves as you drive. A hillside falls away under the left road edge, so on left bends the far road sits
   on its own slope.
 * **Cliff:** the original's plain rock face, with the slant of its cliff-edge sprite, reaching the top of the
-  window. The grass mounds at its foot are always green. The original's colour depended on what was behind them.
-* **Objects:** signs, poles, traffic and the police car are scaled smoothly with distance. They switch to the
-  more detailed sprites further away than in the original, and are hidden behind hill crests and the cliff.
-  Traffic that appears in the distance fades in.
-* **Stage clock** in the top right, counting the same seconds the results screen shows.
+  window. Its outline is notched, like the hillside's on the open side. The grass mounds at its foot are
+  always green. The original's colour depended on what was behind them.
+* **Objects:** signs, poles, traffic and the police car are scaled smoothly with distance. They always use
+  their largest, most detailed sprite, scaled down to their size at any distance without sparkling, as in
+  Test Drive II Enhanced (`--sprite-detail auto`: the sprite size chosen by distance, as in earlier
+  versions). Objects are hidden behind hill crests and the cliff, and traffic that appears in the distance
+  fades in.
+* **Distance and time** in the top right, in Test Drive II's style: miles left to the end of the stage and
+  the stage clock, counting the same seconds the results screen shows.
 * **Kept from the original:** the mirror, dashboard, speeding ticket, "Pulling into…" messages, windscreen
   cracks and GAME OVER.
 
@@ -114,7 +119,7 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 ## Layout
 
 See `ENGINE.md` for the architecture and the rules the engine follows. In short:
-* `src/enhanced/` holds the enhanced road renderer, the screen overlay and the stage clock.
+* `src/enhanced/` holds the enhanced road renderer, the screen overlay and the distance and time readout.
 * `src/mem.*` emulates the real-mode address space the game ran in.
 * `src/host.*` wraps SDL3 and runs the render worker threads.
 * `src/platform/` holds the EGA graphics, timer/sound, input and resource layers.

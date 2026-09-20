@@ -3,6 +3,7 @@
 #include "../mem.h"
 
 void enh_init(void);              /* installs the screen overlay; call before the game starts */
+extern bool enh_sprite_detail_max; /* --sprite-detail: true = max (the largest sprite scale everywhere) */
 
 void enh_stage_begin(void);       /* after the stage buffers are set up */
 void enh_stage_end(void);         /* overlay off (stage left, or a full-screen picture follows) */
