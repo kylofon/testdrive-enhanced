@@ -126,7 +126,10 @@ void draw_dashboard_dynamic(void)
             bx = (u16)(bx - 0x12);
             if (!ge) bx = 0;
         }
-        if ((s16)bx >= 0xA0) bx = 0xA0;
+        /* PORT: the original clamps at 0xA0, so the Countach (~172 mph) and Testarossa (~175 mph) needles
+         * stop at 160 although their dials and tip tables go past 200. Clamp at the table's last entry
+         * (car+0x17A..0x327, 215 tips) instead. */
+        if ((s16)bx >= 0xD6) bx = 0xD6;
         u16 ax = DSW((u16)(0x2809 + (bx << 1)));
         u16 by = (u16)(ax >> 8);
         ax &= 0xFF;

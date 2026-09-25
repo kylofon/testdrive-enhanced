@@ -108,6 +108,8 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 
 * **Held-key driving:** arrows / keypad and A / Z are read while held, not only through key repeat
   (`--bios-keys` restores the original).
+* **Speedometer:** the needle follows the car past 160 mph. The original stops it at 160, although the
+  Countach and Testarossa reach about 172 and 175 mph and their dials go to 200.
 * **Timing:** the gear-shift panel close delay and the windscreen crash animation keep the original 8 fps timing.
   The driving model is unchanged. For example, the brake does nothing while the tyres are skidding, as in the original.
 * **Removed:** copy protection, the TD.EXE launcher password, and Hercules / CGA modes.
