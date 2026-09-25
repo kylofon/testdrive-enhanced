@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.4
+
+- The speedometer needle follows the car past 160 mph. The Countach and Testarossa reach about 172 and 175 mph,
+  but the original stopped their needles at 160.
+
 ## v1.0.3
 
 - Increased framerate for smooth gameplay.
