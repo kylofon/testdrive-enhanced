@@ -1,10 +1,13 @@
 /* game_flow: stage loop, scoring, gas station results, per-frame stage runner —
  * port/spec/game_flow.md §4, scene_render.md §4.9, simulation.md §1. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "flow.h"
 #include "../host.h"
+#include "../keybind.h"
+#include "sim_amiga.h"
 #include "../enhanced/enhanced.h"
 #include "../platform/gfx.h"
 #include "../platform/input.h"
@@ -24,6 +27,13 @@ int run_game(void)
     DSL(DS_g_totalScore) = 0;
     DSW(DS_g_tooSlow) = 0;
     DSW(DS_g_stage) = DSW(DS_demo_mode) ? 4 : 0;
+    /* ENH developer aid: TD_ENH_STAGE=n (0..4) is the stage the first drive starts on (attract mode: stage 4) */
+    static bool stage_done;
+    const char *stage = getenv("TD_ENH_STAGE");
+    if (stage && !stage_done && atoi(stage) >= 0 && atoi(stage) <= 4) {
+        DSW(DS_g_stage) = (u16)atoi(stage);
+        stage_done = true;
+    }
     for (;;) {
         u16 si = (u16)(DSW(DS_g_stage) * 2);
         DSW(DS_g_parTime) = DSW(DS_STAGE_PAR_TIME + si);
@@ -98,7 +108,7 @@ void stage_results(s32 score)
 {
     FarPtr scr = gfx_screen_desc();
     DSW(DS_g_scrollDelay) = 15;
-    snd_play_oneshot(far_rd(DGROUP, DS_g_songGas));
+    flow_song_play(DS_g_songGas);                         /* AMIGA: or the Amiga song */
     DSS(DS_g_lives) = (s16)(DSS(DS_g_lives) + 2);
     FarPtr sb  = load_archive(DSTR(DS_g_sbArchiveName), 0x109A);          /* "<car>sb.pes" (cached) */
     FarPtr gas = load_archive(DSTR(0x768), 2000);                         /* "gas.pes" */
@@ -128,7 +138,7 @@ void stage_results(s32 score)
     getkey_wait();
     gfx_set_clip(scr, 0, 0x28, 0, 200);
     gfx_clear_screen(0);
-    snd_stop_oneshot();
+    flow_song_stop();
 }
 
 /* 0x1B36 results_text — game_flow.md §4 (thresholds and sprintf arguments verified 0x1B36-0x1CF9) */
@@ -212,6 +222,14 @@ int run_stage(void)
 {
     int r;
     stage_init_road_ptr();
+    /* ENH developer aid: TD_ENH_UNIT=n starts the first stage n road units in (the wide roads of the Amiga
+     * features begin at unit 1484 of stage 1). */
+    static bool unit_done;
+    const char *unit = getenv("TD_ENH_UNIT");
+    if (unit && !unit_done) {
+        DSW(DS_road_pos) = (u16)(DSW(DS_road_pos) + atoi(unit));
+        unit_done = true;
+    }
     reset_car_state();
     stage_enter_install_isr();
     select_screen();
@@ -220,6 +238,8 @@ int run_stage(void)
     blit_copy_own(far_rd(DGROUP, DS_car_handles));       /* dash */
     blit_copy_own(far_rd(DGROUP, DS_spr_roof));
     DSW(DS_g_stageTime) = 0;
+    kb_set_active(true);                                  /* PORT: key bindings while driving */
+    sim_amiga_stage_begin();                              /* AMIGA */
     enh_stage_begin();                                    /* ENH: enhanced renderer */
     for (;;) {
         host_frame_begin();                               /* PORT: ticks (and the sim ISR) advance here; paced
@@ -249,7 +269,9 @@ int run_stage(void)
             DSW(DS_g_avgSpeed) = (u16)(DSW(DS_road_pos) - DSW(DS_STAGE_START + DSW(DS_g_stage) * 2) - 0x2D);
             if (DSW(DS_g_stage) == 4) {
                 enh_stage_end();
+                flow_ending_song(true);                   /* AMIGA: EndSuccess with the Amiga music */
                 dealership_ending();
+                flow_ending_song(false);
             }
             r = 1;
             break;
@@ -273,6 +295,7 @@ int run_stage(void)
         enh_life_reset();
         snd_set_loop(far_make(DGROUP, DS_SONG_INGAME));
     }
+    kb_set_active(false);
     snd_stop_all();
     enh_stage_end();
     /* the three descriptors are offsets into the code-segment pool (push cs; push [DS:08B2]) — LIFO */

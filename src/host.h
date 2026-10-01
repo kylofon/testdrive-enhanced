@@ -8,6 +8,7 @@
 
 bool host_init(const char *game_dir, int window_scale);
 void host_shutdown(void);
+void host_set_fullscreen(bool on);   /* --fullscreen; Alt+Enter switches */
 
 /* Called once per 100.0404 Hz tick from host_pump() (the port's replacement for INT 8).
  * The timer/sound module installs the base ISR body; driving mode chains the simulation ISR. */
@@ -16,6 +17,17 @@ void host_set_tick_handler(void (*handler)(void));
 /* Source of the displayed image: fills a w x h XRGB8888 frame (320x200 times an integer scale) and returns
  * true if it changed since the last call. Installed by the graphics module. */
 void host_set_frame_source(bool (*compose)(u32 *xrgb), int w, int h);
+
+/* Sharp scaling (pixel art) of the frame instead of smooth; the Amiga screens use it. */
+void host_set_frame_sharp(bool on);
+/* The Amiga engine shows its own screens for a while: the DOS game's frame source is saved, and put back. */
+void host_save_frame_source(void);
+void host_restore_frame_source(void);
+/* Every key going down or up (SDL scancode and modifiers) is offered to the hook first; a key going down that
+ * the hook takes (returns true) does not reach the BIOS buffer. NULL removes it. */
+void host_set_key_hook(bool (*hook)(int scancode, int mod, bool down, bool repeat));
+/* Called by every host_pump(), after the window's events (the Amiga engine's 60 Hz vertical blank). */
+void host_set_pump_hook(void (*hook)(void));
 
 /* Runs due timer ticks, generates speaker audio, handles window events and presents the screen when
  * it changed. Every busy-wait loop of the original (key polls, deadlines, delays) must call this.
@@ -51,7 +63,8 @@ u8   host_kbd_shift_flags(void); /* AH=02h: bit0 right shift, bit1 left shift, b
 void host_set_held_keys(bool on);
 bool host_held_keys(void);
 /* True while the key with this XT scan code is down. Supports A (0x1E), Z (0x2C) and the cursor /
- * keypad block 0x47..0x51 (arrows and keypad digits both count). */
+ * keypad block 0x47..0x51 (arrows and keypad digits both count). While driving, A, Z and the arrows are the
+ * keys bound to their actions (keybind.h). */
 bool host_xt_key_down(u8 xt_scan);
 
 /* ---- Joystick: first connected gamepad. Axes -32768..32767, buttons bit0 = A, bit1 = B. */

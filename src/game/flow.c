@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "flow.h"
+#include "../amiga_opts.h"
 #include "../host.h"
 #include "../platform/gfx.h"
 #include "../platform/input.h"
@@ -135,10 +136,20 @@ int game_main(void)
     DSW(DS_demo_mode) = 0;
     load_cars_txt();
     kbd_flush();
+    flow_amiga_start();                                  /* AMIGA */
+    /* ENH developer aid: TD_ENH_DEMO=1 goes straight to an attract-mode drive (the autopilot drives) with the
+     * first car (TD_ENH_CAR=n: car n of CARS.TXT), for checking the renderer. */
+    if (getenv("TD_ENH_DEMO")) {
+        DSW(DS_demo_mode) = 1;
+        DSS(DS_g_selectedCar) = (s16)(getenv("TD_ENH_CAR") ? atoi(getenv("TD_ENH_CAR")) : 0);   /* TD_ENH_CAR=n */
+        DSW(DS_g_carAutoSelected) = 1;
+        DSL(DS_g_totalScore) = 0;
+        run_game();
+    }
 
 intro:
     DSW(DS_demo_mode) = 0;
-    r = run_intro();
+    r = amiga.intro ? flow_amiga_intro() : run_intro();  /* AMIGA: the Amiga title sequence */
     if (r == 1) goto dos;
     if (r != -1) goto decide;
     DSW(DS_demo_mode) = 1;
@@ -150,12 +161,12 @@ scores:
 decide:
     need = (u16)((DSS(DS_g_selectedCar) == -1 ? 1 : 0) | DSW(DS_demo_mode) | DSW(DS_g_carAutoSelected));
     if (need == 0) {
-        need = (u16)play_again_menu();
+        need = (u16)(amiga.menu ? flow_amiga_play_again() : play_again_menu());   /* AMIGA */
         if (need == 0xFFFF) goto dos;
     }
     if (need != 0) {
         load_cars_txt();                                 /* called with a dummy argument 1 */
-        r = car_select();
+        r = amiga.menu ? flow_amiga_car_select() : car_select();   /* AMIGA: the Amiga showroom */
         if (r == 1) goto dos;
         DSW(DS_demo_mode) = (r == -1) ? 1 : 0;
     }
@@ -225,7 +236,7 @@ int play_again_menu(void)
 int run_intro(void)
 {
     gfx_clear_screen(0);
-    snd_play_oneshot(far_rd(DGROUP, DS_g_songIntro));
+    flow_song_play(DS_g_songIntro);                      /* AMIGA: or the Amiga song */
     far_wr(DGROUP, DS_g_introArchive, load_archive(DSTR(0xFE), 2000));       /* ACCOLADE.PES */
     int r = intro_accolade();
     if (r == -1) {
@@ -233,7 +244,7 @@ int run_intro(void)
         r = intro_testdrive_car();
     }
     if (r == -1) r = intro_testdrive_logo();
-    snd_stop_oneshot();
+    flow_song_stop();
     /* PORT: if (copy_protection_check()) r = 1; dropped. */
     return r;
 }

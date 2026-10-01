@@ -14,7 +14,7 @@ int car_select(void)
     s16 idx = 0;
     int k = -1;
     gfx_clear_screen(0);
-    snd_play_oneshot(far_rd(DGROUP, DS_g_songCarSel));
+    flow_song_play(DS_g_songCarSel);                     /* AMIGA: or the Amiga song */
     show_car(0, 0);
     for (;;) {
         set_deadline(12000);
@@ -38,10 +38,10 @@ int car_select(void)
             showroom_drive_away(idx);
             DSS(DS_g_selectedCar) = idx;
             DSW(DS_g_carAutoSelected) = 1;
-            snd_stop_oneshot();
+            flow_song_stop();
             return -1;
         }
-        if (k == 1) { snd_stop_oneshot(); return 1; }
+        if (k == 1) { flow_song_stop(); return 1; }
         if (k == 0x4800) {
             idx++;
             if (DSS(DS_g_numCars) <= idx) idx = 0;
@@ -58,7 +58,7 @@ int car_select(void)
             showroom_drive_away(idx);
             DSS(DS_g_selectedCar) = idx;
             DSW(DS_g_carAutoSelected) = 0;
-            snd_stop_oneshot();
+            flow_song_stop();
             return 0;
         }
     }

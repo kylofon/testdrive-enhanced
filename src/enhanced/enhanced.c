@@ -13,15 +13,21 @@
  *     slanted rock face on the other side and a hillside under the left road edge;
  *   - the original sprites decoded from their plane data and scaled with distance;
  *   - Test Drive II's distance and time readout (top right), 8 Hz emulation of the frame-counted gear-box
- *     delay, own crash sequence.
+ *     delay, own crash sequence;
+ *   - AMIGA (--amiga, ../amiga_opts.h): the Amiga release's projection, sky, cliffs, wide roads and signs, drawn
+ *     by this renderer with the Amiga disk's art (../amiga/abridge.h).
  * Pixels that the original draws over the road window are left to the EGA image: the mirror, the
  * ticket and the status text (computed coverage) and anything drawn on screen after the road buffer
  * was presented (VRAM compared against a snapshot taken at that moment).
  */
 #include "enhanced.h"
+#include "enh_amiga_dash.h"
+#include "../amiga_opts.h"
+#include "../amiga/abridge.h"
 #include "../host.h"
 #include "../symbols.h"
 #include "../game/game.h"
+#include "../game/sim_amiga.h"
 #include "../platform/gfx.h"
 
 #include <math.h>
@@ -33,8 +39,12 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#define WIN_Y0    19                /* road window rows 19..110 */
-#define WIN_Y1    111
+/* The road window: rows 19..110 as the original's, or with the Amiga dashboards (AMIGA) the Amiga's 0..116 */
+#define DOS_Y0    19
+#define DOS_Y1    111
+static int win_y0 = DOS_Y0, win_y1 = DOS_Y1;
+#define WIN_Y0    win_y0
+#define WIN_Y1    win_y1
 #define WIN_H     (WIN_Y1 - WIN_Y0)
 #define NROWS     120               /* road rows drawn (the original draws 40) */
 #define HORIZON   82.0              /* horizon row on the open side (eye level is row 70) */
@@ -68,7 +78,7 @@ static double *cliff_jag, *hill_jag;   /* RH: notch depth of the rock face's / h
 static float *far_top, *near_top, *snow;   /* RW: mountain outlines */
 static u32   *valley, *soft, *out;  /* OW x OH */
 static u8    cover[320 * 200];      /* 1 = show the EGA image */
-static u8    vram_snap[4][40 * WIN_H];
+static u8    vram_snap[4][40 * 200];     /* the EGA planes when the road buffer was presented */
 
 /* ------------------------------------------------------------------------------------------------ */
 /* colours                                                                                          */
@@ -176,9 +186,11 @@ static double noise2(double x, double y, u32 seed)
 /* ------------------------------------------------------------------------------------------------ */
 /* view state                                                                                       */
 
-typedef struct { double Z, X, Y, sx, sy, hw; u8 obj, cnt; } Row;
+/* wr: the right half of the road as a multiple of the left (1 = the usual road; Amiga wide roads up to 2) */
+typedef struct { double Z, X, Y, sx, sy, hw, wr; u8 obj, cnt; } Row;
 
 static Row      rows[NROWS + 1];
+static int      nrows = NROWS;             /* rows in use: the Amiga projection reaches the haze in fewer */
 static double   frac;                      /* car progress through its road unit, 0..1 */
 static u16      base_pos;                  /* road unit of row 0 */
 static double   sm_carx, sm_head;          /* smoothed car_x/8 and view heading (deg*256) */
@@ -357,11 +369,79 @@ static void update_view(void)
     }
 }
 
+/* AMIGA wide roads: the record's first byte (DOS "flag", unused there) is the Amiga's width code, hi nibble
+ * left, lo nibble right, half-width 0x140 + 0x40 n; 0xFF keeps the width of the row before (drive_scene.md §4.3
+ * row_widths). The shipped codes are 0x22..0x29: the left half is always 0x1C0, the right one 0x1C0..0x380. */
+#define AMIGA_HALF_NORMAL 0x1C0
+#define AMIGA_LANE_MARKS  0x224                /* right halves wider than this get lane marks (draw_lane_marks) */
+static double width_of(u8 code) { return (0x140 + 0x40 * (code & 15)) / (double)AMIGA_HALF_NORMAL; }
+
+/* The right half-width factor in force at unit p: the last width code at or before it (the simulation's). */
+static double width_at(u16 p) { return amiga_road_width(p); }
+
+/* AMIGA projection (drive_scene.md §4.3, the road walker 0x1E314): each row is 1/0.910 times as deep as the
+ * one before (row_scale_step, 0xE8F5), the heading turns by curve/8 degrees per row up to +-90 degrees, the road
+ * centre moves by sin(heading) * 80 * scale px per row, and the slope gathers pitch * (0.28 - scale / 4) per
+ * row, clamped by the row's slope_clamp (D:0B38), lifting the road by slope * scale / 4 px. In this renderer's
+ * terms a scale s is the depth 24.3 / s (the Amiga's road at s = 1 is 448 px half-wide and 89 px below its
+ * horizon, this one's 10125 / Z and 2160 / Z), so a row moves 12.96 sin(heading) X units sideways and
+ * 0.03375 * slope Y units up. */
+#define AMIGA_Z0      24.3
+#define AMIGA_ZSTEP   (65536.0 / 0xE8F5)
+#define AMIGA_ZMAX    3200.0                  /* past the full haze: the rows after it are not walked */
+static const u8 AMIGA_SLOPE_CLAMP[16] = { 0, 0, 1, 1, 2, 2, 3, 5, 8, 10, 15, 20, 25, 30, 35, 40 };
+
+static double amiga_depth(double t) { return AMIGA_Z0 * pow(AMIGA_ZSTEP, t); }
+
+static void walk_road_amiga(void)
+{
+    bool ended = false, e0 = false;
+    u8 phase = (u8)(DSB(DS_road_anim_counter) + pos_carry);
+    u8 b1 = road_rec(base_pos, &e0);
+    double wr = amiga.wide_roads ? width_at(base_pos) : 1.0;
+    /* the first row's own curve and pitch fade out as the car moves through its unit, as in walk_road */
+    double head = sm_head / 256.0 - frac * (s8)REC(b1, 1) / 8.0;
+    double slope = 0;
+    rows[0] = (Row){ .Z = amiga_depth(-frac), .X = sm_carx, .Y = -12.0, .wr = wr };
+    project(&rows[0]);
+    nrows = NROWS;
+    for (int i = 1; i <= NROWS; i++) {
+        u8 b = road_rec((u16)(base_pos + i - 1), &ended);
+        Row *r = &rows[i], *p = &rows[i - 1];
+        double t = i - frac, sc = 1.0 / pow(AMIGA_ZSTEP, t < 0 ? 0 : t);
+        head += (s8)REC(b, 1) / 8.0;
+        if (head < -90.0) head = -90.0;
+        if (head > 90.0) head = 90.0;
+        slope += (s8)REC(b, 2) * (0.28125 - sc / 4.0);
+        double clamp = i < 16 ? AMIGA_SLOPE_CLAMP[i] : 40.0;
+        if (slope < -clamp) slope = -clamp;
+        if (slope > clamp) slope = clamp;
+        r->X = p->X + 12.96 * sin(head * M_PI / 180.0);
+        r->Y = p->Y + 0.03375 * slope;
+        r->Z = amiga_depth(t);
+        r->obj = REC(b, 3);
+        r->cnt = (u8)(phase + i - 1);
+        if (amiga.wide_roads && REC(b, 0) != 0xFF) wr = width_of(REC(b, 0));
+        r->wr = wr;
+        project(r);
+        if (r->Z > AMIGA_ZMAX) {
+            nrows = i;
+            break;
+        }
+    }
+}
+
 /* Walks the road like 0x2054, but NROWS rows, continuous depth and float trigonometry. The first
  * record's contribution is faded out as the car moves through its unit, so that at frac = 1 row i
  * matches row i-1 of the next unit. */
 static void walk_road(void)
 {
+    if (amiga.projection) {
+        walk_road_amiga();
+        return;
+    }
+    nrows = NROWS;
+    double wr = amiga.wide_roads ? width_at(base_pos) : 1.0;
     bool ended = false, e0 = false;
     /* The counter steps once per road unit (sim.c: sim_advance_unit), so a unit the extrapolation crossed
      * has to be added here; otherwise the dashes, poles and roadside pieces, which are keyed to it, would
@@ -377,7 +457,7 @@ static void walk_road(void)
     if (h1 < -0x4B00) h1 = -0x4B00;
     if (h1 > 0x4B00) h1 = 0x4B00;
     double dx1 = 2.0 * sin15(h1), dy1 = sin15(slope + (s8)REC(b1, 2) * 4.0);
-    rows[0] = (Row){ .Z = depth_of(-frac), .X = sm_carx - frac * dx1, .Y = -12.0 - frac * dy1 };
+    rows[0] = (Row){ .Z = depth_of(-frac), .X = sm_carx - frac * dx1, .Y = -12.0 - frac * dy1, .wr = wr };
     project(&rows[0]);
     for (int i = 1; i <= NROWS; i++) {
         u8 b = road_rec((u16)(base_pos + i - 1), &ended);
@@ -391,6 +471,8 @@ static void walk_road(void)
         r->Z = depth_of(i - frac);
         r->obj = REC(b, 3);
         r->cnt = (u8)(phase + i - 1);
+        if (amiga.wide_roads && REC(b, 0) != 0xFF) wr = width_of(REC(b, 0));
+        r->wr = wr;
         project(r);
     }
 }
@@ -399,7 +481,7 @@ static void walk_road(void)
 static bool sample_road(double d, double *X, double *Y, double *Z)
 {
     double u = d + frac;
-    if (u < 0 || u >= NROWS) return false;
+    if (u < 0 || u >= nrows) return false;
     int i = (int)u;
     double s = u - i;
     const Row *a = &rows[i], *b = &rows[i + 1];
@@ -468,33 +550,36 @@ static void span(int r, double x0, double x1, u32 c, u8 m, float z)
 }
 
 /* Road surface between near row a and far row b (scanlines between their projections). As in the
- * original's scanline fill, everything right of the nearest road row on a scanline is cliff. */
+ * original's scanline fill, everything right of the nearest road row on a scanline is cliff. AMIGA wide roads:
+ * the right half is b->wr times as wide; where it is wider than 0x224 / 0x1C0 the original right edge gets a
+ * dashed white lane mark and the centre line is drawn solid (draw_lane_marks, draw_centre_line). */
 static void road_surface(const Row *a, const Row *b, u8 cnt, u32 cliff, int b0, int b1)
 {
     if (a->sy <= b->sy + 1e-9) return;              /* seen from behind (past a crest) */
     int r0 = ss_row(b->sy), r1 = ss_row(a->sy);
     if (r0 < b0) r0 = b0;
     if (r1 > b1) r1 = b1;
-    bool alt = (cnt >> 1) & 1, dash = !(cnt & 4);
+    bool wide = b->wr > AMIGA_LANE_MARKS / (double)AMIGA_HALF_NORMAL;
+    bool alt = (cnt >> 1) & 1, dash = !(cnt & 4) || wide, lane = wide && !(cnt & 4);
     for (int r = r0; r < r1; r++) {
         if (row_full(r)) continue;
         double yc = row_y(r);
         double s = (yc - b->sy) / (a->sy - b->sy);
         double cx = b->sx + (a->sx - b->sx) * s, hw = b->hw + (a->hw - b->hw) * s;
+        double hr = hw * (b->wr + (a->wr - b->wr) * s);
         double z = 1.0 / (1.0 / b->Z + (1.0 / a->Z - 1.0 / b->Z) * s);
         float zf = (float)z;
-        if (dash) {
-            double dw = hw * 0.03;
-            if (dw < 0.5 / Q) dw = 0.5 / Q;
-            span(r, cx - dw, cx + dw, road_hazed(C_DASH, z), 7, zf);
-        }
+        double dw = hw * 0.03;
+        if (dw < 0.5 / Q) dw = 0.5 / Q;
+        if (dash) span(r, cx - dw, cx + dw, road_hazed(C_DASH, z), 7, zf);
+        if (lane) span(r, cx + hw - dw, cx + hw + dw, road_hazed(C_DASH, z), 7, zf);
         u32 road = road_hazed(alt ? C_ROAD_B : C_ROAD_A, z), shld = road_hazed(alt ? C_SHLD_B : C_SHLD_A, z);
         span(r, cx - 1.25 * hw, cx - hw, shld, 1, zf);
-        span(r, cx - hw, cx + hw, road, 0, zf);
-        span(r, cx + hw, cx + 1.25 * hw, shld, 1, zf);
+        span(r, cx - hw, cx + hr, road, 0, zf);
+        span(r, cx + hr, cx + hr + 0.25 * hw, shld, 1, zf);
         if (!row_claimed[r]) {
             row_claimed[r] = true;
-            span(r, cx + 1.25 * hw, 1e6, hazed(cliff, z), 2, zf);
+            span(r, cx + hr + 0.25 * hw, 1e6, hazed(cliff, z), 2, zf);
         }
     }
 }
@@ -510,17 +595,19 @@ static double jag_at(double jag, double h)
  * also covers everything to its right. Every row's edge is notched by the same cliff_jag[] of the
  * scanline (faded in above the road edge), so the outline is uneven like the sprite's and the strips
  * still meet without gaps. */
+static double cliff_lean = CLIFF_LEAN;      /* AMIGA cliffs: the slant of clf0 */
+
 static void cliff_face(const Row *a, const Row *b, bool nearest, int b0, int b1)
 {
-    double ax = a->sx + 1.25 * a->hw, bx = b->sx + 1.25 * b->hw;
+    double ax = a->sx + (a->wr + 0.25) * a->hw, bx = b->sx + (b->wr + 0.25) * b->hw;
     double iza = 1.0 / a->Z, izb = 1.0 / b->Z;
     int rmax = ss_row(a->sy > b->sy ? a->sy : b->sy);
     if (rmax > b1) rmax = b1;
-    if (rmax <= b0 || (!nearest && strip_offscreen(ax, a->sy, bx, b->sy, CLIFF_LEAN, CLIFF_JAG, b0, rmax))) return;
+    if (rmax <= b0 || (!nearest && strip_offscreen(ax, a->sy, bx, b->sy, cliff_lean, CLIFF_JAG, b0, rmax))) return;
     for (int r = rmax - 1; r >= b0; r--) {
         double yc = row_y(r);
         double ha = a->sy - yc, hb = b->sy - yc, jag = cliff_jag[r];
-        double xa = ax + CLIFF_LEAN * ha + jag_at(jag, ha), xb = bx + CLIFF_LEAN * hb + jag_at(jag, hb);
+        double xa = ax + cliff_lean * ha + jag_at(jag, ha), xb = bx + cliff_lean * hb + jag_at(jag, hb);
         if (!nearest && xa > 320 && xb > 320) break;          /* only moves further right upwards */
         if (row_full(r)) continue;
         double dx = xb - xa;
@@ -613,9 +700,53 @@ static void left_side(const Row *a, const Row *b, int b0, int b1)
 
 static u32 cliff_colour;
 
+/* AMIGA: the art of Pics/Road.Shp in the road palette (drive_scene.md §4.11), fetched at stage start. */
+#define ROAD_SHP "Pics/Road.Shp"
+static const AmigaImage *am_clf0, *am_cloud[4], *am_pol[5], *am_pst[4], *am_sign[16][5];
+static u32 am_cliff_rgb;
+
+static void amiga_art_load(void)
+{
+    am_clf0 = NULL;
+    memset(am_cloud, 0, sizeof am_cloud);
+    memset(am_pol, 0, sizeof am_pol);
+    memset(am_pst, 0, sizeof am_pst);
+    memset(am_sign, 0, sizeof am_sign);
+    if (!amiga_ready()) return;
+    char n[5];
+    if (amiga.cliffs) {
+        am_clf0 = amiga_image(ROAD_SHP, "clf0", NULL);
+        am_cliff_rgb = amiga_rgb(AMIGA_ROAD_PALETTE[6]);   /* colour 6: 0x743 */
+        cliff_lean = CLIFF_LEAN;
+        if (am_clf0 && am_clf0->h > 1) {                   /* the slant of clf0's left edge */
+            int top = -1, bot = -1;
+            for (int x = 0; x < am_clf0->w && (top < 0 || bot < 0); x++) {
+                if (top < 0 && am_clf0->px[x] >> 24) top = x;
+                if (bot < 0 && am_clf0->px[(am_clf0->h - 1) * am_clf0->w + x] >> 24) bot = x;
+            }
+            if (top >= 0 && bot >= 0) cliff_lean = (double)(top - bot) / (am_clf0->h - 1);
+        }
+    }
+    if (amiga.sky) {
+        static const char *const CLOUDS[4] = { "cldA", "cldB", "cld0", "cld1" };
+        for (int i = 0; i < 4; i++) am_cloud[i] = amiga_image(ROAD_SHP, CLOUDS[i], NULL);
+    }
+    if (amiga.signs) {
+        static const char *const SIGNS[16] = { NULL, NULL, "rtn", "ltn", "twt", "sp3", "sp5", "sp6",
+                                               "gas", "gas", "gas", "gas", "gas", "pas", "mrg", NULL };
+        for (int k = 0; k < 5; k++) {
+            snprintf(n, sizeof n, "pol%d", k);
+            am_pol[k] = amiga_image(ROAD_SHP, n, NULL);
+            if (k > 0) { snprintf(n, sizeof n, "pst%d", k); am_pst[k - 1] = amiga_image(ROAD_SHP, n, NULL); }
+            for (int c = 0; c < 16; c++)
+                if (SIGNS[c]) { snprintf(n, sizeof n, "%s%d", SIGNS[c], k); am_sign[c][k] = amiga_image(ROAD_SHP, n, NULL); }
+        }
+    }
+}
+
 static void prepare_road(void)
 {
-    cliff_colour = gfx_palette_rgb(10);             /* colour 2 of the road buffer on screen */
+    cliff_colour = amiga.cliffs ? am_cliff_rgb : gfx_palette_rgb(10);   /* colour 2 of the road buffer on screen */
     for (int i = 0; i < ZLUT_N; i++) cliff_tab[i] = blend(cliff_colour, C_HAZE, haze_lut[i]);
     /* Notches of the rock face's and the hillside's edges: small bumps with slight roughness in them,
      * fixed to the screen like a distant outline. */
@@ -629,7 +760,7 @@ static void prepare_road(void)
 
 static void draw_road(int b0, int b1)
 {
-    for (int i = 0; i < NROWS; i++) {
+    for (int i = 0; i < nrows; i++) {
         const Row *a = &rows[i], *b = &rows[i + 1];
         road_surface(a, b, b->cnt, cliff_colour, b0, b1);
         cliff_face(a, b, i == 0, b0, b1);
@@ -641,6 +772,47 @@ static void draw_road(int b0, int b1)
 /* background where nothing was drawn: sky, mountains, valley                                       */
 
 static double bg_sv, bg_cv;                 /* view direction for the valley floor */
+
+/* AMIGA sky (drive_scene.md §4.6 draw_clouds): colour 4 (0x3BF) and the clouds cldA, cldB, cld0, cld1, 17, 20, 35
+ * and 38 px above the horizon. They drift right by 0.061, 0.076, 0.092 and 0.107 px a frame at the Amiga's 12
+ * frames a second, and move against the view's turns by 5 px (the first two) or 6 px a degree; x wraps over
+ * -400..400. */
+static const double CLOUD_DY[4] = { 0x11, 0x14, 0x23, 0x26 };
+static const double CLOUD_DRIFT[4] = { 0xFA0 * 12.0 / 65536, 0x1388 * 12.0 / 65536, 0x1770 * 12.0 / 65536,
+                                       0x1B58 * 12.0 / 65536 };   /* px a second */
+static double cloud_x[4] = { 0x1E, 0x78, 0x32, 0x15E };
+static double cloud_view = 1e9;             /* view_deg at the last frame; 1e9 = none yet */
+static uint64_t cloud_ns;
+
+static void move_clouds(void)
+{
+    uint64_t now = host_time_ns();
+    double dt = cloud_ns ? (double)(now - cloud_ns) / 1e9 : 0.0;
+    if (dt > 0.25) dt = 0.25;
+    cloud_ns = now;
+    double d = cloud_view > 1e8 ? 0.0 : view_deg - cloud_view;
+    cloud_view = view_deg;
+    d = fmod(d + 540.0, 360.0) - 180.0;
+    for (int i = 0; i < 4; i++) {
+        cloud_x[i] += CLOUD_DRIFT[i] * dt - (i < 2 ? 5.0 : 6.0) * d;
+        while (cloud_x[i] >= 400.0) cloud_x[i] -= 800.0;
+        while (cloud_x[i] < -400.0) cloud_x[i] += 800.0;
+    }
+}
+
+/* The cloud colour over the sky at (x, y), or 0 where no cloud is (clouds are opaque pixel art). */
+static u32 cloud_at(double x, double y)
+{
+    for (int i = 3; i >= 0; i--) {
+        const AmigaImage *c = am_cloud[i];
+        if (!c) continue;
+        int ix = (int)floor(x - (cloud_x[i] - c->hx)), iy = (int)floor(y - (HORIZON - CLOUD_DY[i] - c->hy));
+        if (ix < 0 || iy < 0 || ix >= c->w || iy >= c->h) continue;
+        u32 p = c->px[iy * c->w + ix];
+        if (p >> 24) return p & 0xFFFFFF;
+    }
+    return 0;
+}
 static float *mist;                         /* RH: ground-mist weight above the horizon */
 
 #define HORIZON_HAZE 0.6f                   /* haze where the valley floor meets the mountains */
@@ -652,8 +824,14 @@ static void prepare_background(void)
     bg_sv = sin(va);
     bg_cv = cos(va);
 
+    if (amiga.sky) move_clouds();
     /* mountain heights per internal column */
     for (int c = 0; c < RW; c++) {
+        if (amiga.sky) {                                /* AMIGA sky: no mountains */
+            far_top[c] = near_top[c] = (float)HORIZON;
+            snow[c] = -1e9f;
+            continue;
+        }
         double xc = (c + 0.5) / Q;
         double th = view_deg + atan((xc - 120.0) / 150.0) * 180.0 / M_PI;
         double u = th / 360.0;
@@ -667,7 +845,8 @@ static void prepare_background(void)
     }
     for (int r = 0; r < RH; r++) {
         float t = (float)((row_y(r) - WIN_Y0) / (HORIZON - WIN_Y0));
-        sky[r] = pack(mix(hex(C_SKY_TOP), hex(C_SKY_LOW), t > 1 ? 1 : t * t * (2.0f - t)));
+        sky[r] = amiga.sky ? amiga_rgb(AMIGA_ROAD_PALETTE[4])
+                           : pack(mix(hex(C_SKY_TOP), hex(C_SKY_LOW), t > 1 ? 1 : t * t * (2.0f - t)));
         double h = HORIZON - row_y(r);      /* rows above the horizon: ground mist thins out over a few rows */
         mist[r] = h > 0 ? (float)exp(-h / MIST_ROWS) : 1.0f;
     }
@@ -720,7 +899,8 @@ static void draw_background(int b0, int b1)
                 /* mf already carries 0.2 haze: 1 - 0.8 * (1 - 0.5) = HORIZON_HAZE at the foot */
                 pc[c] = blend(yc < snow[c] ? sn : mf, C_HAZE, 0.05f + 0.45f * mist[r]);
             } else {
-                pc[c] = sky[r];
+                u32 cl = amiga.sky ? cloud_at((c + 0.5) / Q, yc) : 0;
+                pc[c] = cl ? cl : sky[r];
             }
         }
     }
@@ -871,13 +1051,74 @@ static const u8 BAYER[4][4] = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9
 
 static bool dither_pass(float cov, int c, int r) { return (float)BAYER[r & 3][c & 3] + 0.5f < cov * 16.0f; }
 
+/* AMIGA: an Amiga image with reduced copies for strong downscaling, premultiplied ARGB (level L averages
+ * 2^L x 2^L pixels), like the sprites' (build_mips). */
+typedef struct {
+    const AmigaImage *img;
+    int nmip;
+    int mip_w[SPR_MIPS + 1], mip_h[SPR_MIPS + 1];
+    u32 *mip[SPR_MIPS + 1];                /* [0] = the image premultiplied */
+} AmImg;
+
+#define AMIMG_CACHE 128
+static AmImg amimg[AMIMG_CACHE];
+static int namimg;
+
+static void amimg_clear(void)
+{
+    for (int i = 0; i < namimg; i++)
+        for (int L = 0; L <= amimg[i].nmip; L++) free(amimg[i].mip[L]);
+    namimg = 0;
+}
+
+static const AmImg *amimg_get(const AmigaImage *img)
+{
+    if (!img) return NULL;
+    for (int i = 0; i < namimg; i++)
+        if (amimg[i].img == img) return &amimg[i];
+    if (namimg == AMIMG_CACHE) return NULL;
+    AmImg *a = &amimg[namimg];
+    memset(a, 0, sizeof *a);
+    a->img = img;
+    a->mip_w[0] = img->w;
+    a->mip_h[0] = img->h;
+    a->mip[0] = malloc((size_t)img->w * img->h * sizeof(u32));
+    if (!a->mip[0]) return NULL;
+    memcpy(a->mip[0], img->px, (size_t)img->w * img->h * sizeof(u32));   /* alpha is 0 or 255: premultiplied */
+    for (int L = 1; L <= SPR_MIPS; L++) {
+        int pw = a->mip_w[L - 1], ph = a->mip_h[L - 1], w = (pw + 1) / 2, h = (ph + 1) / 2;
+        u32 *m = malloc((size_t)w * h * sizeof(u32));
+        if (!m) break;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                u32 acc[4] = { 0 };
+                for (int j = 0; j < 2; j++)
+                    for (int i = 0; i < 2; i++) {
+                        int sx = 2 * x + i < pw ? 2 * x + i : pw - 1, sy = 2 * y + j < ph ? 2 * y + j : ph - 1;
+                        u32 p = a->mip[L - 1][sy * pw + sx];
+                        for (int k = 0; k < 4; k++) acc[k] += p >> (8 * k) & 255;
+                    }
+                m[y * w + x] = (acc[3] / 4) << 24 | (acc[2] / 4) << 16 | (acc[1] / 4) << 8 | acc[0] / 4;
+            }
+        a->mip[L] = m;
+        a->mip_w[L] = w;
+        a->mip_h[L] = h;
+        a->nmip = L;
+        if (w <= 1 && h <= 1) break;
+    }
+    namimg++;
+    return a;
+}
+
 typedef struct {
     const Spr *s;
+    const AmImg *am;                       /* AMIGA: an Amiga image (s is NULL), clipped below y = clip */
     int op, prio, sub, seq;
     bool raw;                              /* position is the top-left corner (no hotspot) */
     double x, y, k, z;
     float alpha;
     int base;                              /* XOR pieces: colour index they are applied to (-1: the pixel's) */
+    double clip;
     Lut lut[16];
     u32 pal[8];
 } Item;
@@ -893,11 +1134,68 @@ static Item *add_item(u16 handle_addr, int op, int prio, int sub, bool raw, doub
     const Spr *spr = spr_get(far_rd(DGROUP, handle_addr));   /* decoded here, not on the worker threads */
     if (!spr) return NULL;
     Item *it = &items[nitems];
-    *it = (Item){ spr, op, prio, sub, nitems, raw, x, y, k, z, alpha, -1, { { 0 } }, { 0 } };
+    *it = (Item){ spr, NULL, op, prio, sub, nitems, raw, x, y, k, z, alpha, -1, 0, { { 0 } }, { 0 } };
     make_lut(spr, op, it->lut);
     for (int m = 0; m < 8; m++) it->pal[m] = hazed(gfx_palette_rgb((u8)(m | 8)), z);
     nitems++;
     return it;
+}
+
+/* AMIGA: an Amiga image at (x, y) (its hot spot), k times its size, at depth z, nothing of it below y = clip
+ * (each Amiga object is clipped at its own base line) */
+static void add_image(const AmigaImage *img, int prio, int sub, double x, double y, double k, double z, double clip)
+{
+    if (nitems == MAX_ITEMS) return;
+    const AmImg *a = amimg_get(img);                         /* built here, not on the worker threads */
+    if (!a) return;
+    Item *it = &items[nitems];
+    *it = (Item){ NULL, a, OP_OR, prio, sub, nitems, false, x, y, k, z, 1.0f, -1, clip, { { 0 } }, { 0 } };
+    nitems++;
+}
+
+static void draw_image(const Item *it, int b0, int b1)
+{
+    const AmImg *a = it->am;
+    const AmigaImage *img = a->img;
+    double k = it->k;
+    if (img->h * k * Q < 0.75) return;
+    double x0 = it->x - img->hx * k, y0 = it->y - img->hy * k;
+    int c0 = ss_col(x0), c1 = ss_col(x0 + img->w * k), r0 = ss_row(y0), r1 = ss_row(y0 + img->h * k);
+    int rc = ss_row(it->clip);
+    if (c0 < 0) c0 = 0;
+    if (c1 > RW) c1 = RW;
+    if (r0 < b0) r0 = b0;
+    if (r1 > b1) r1 = b1;
+    if (r1 > rc) r1 = rc;
+    if (c0 >= c1 || r0 >= r1) return;
+    float zt = (float)it->z - Z_EPS, hz = haze_of(it->z);
+    double inv = 1.0 / (k * Q);
+    int L = 0;
+    for (double px = 1.0 / (k * OK); L < a->nmip && px >= (double)(2 << L); ) L++;
+    const u32 *m = a->mip[L];
+    int mw = a->mip_w[L], mh = a->mip_h[L];
+    u32 hazec = C_HAZE;
+    for (int r = r0; r < r1; r++) {
+        int sy = (int)floor((r + 0.5 + (WIN_Y0 - y0) * Q) * inv);
+        sy = (sy < 0 ? 0 : sy >= img->h ? img->h - 1 : sy) >> L;
+        const u32 *mrow = m + (size_t)(sy < mh ? sy : mh - 1) * mw;
+        size_t row = (size_t)r * RW;
+        for (int c = c0; c < c1; c++) {
+            size_t p = row + c;
+            if (zbuf[p] < zt) continue;
+            int sx = (int)floor((c + 0.5 - x0 * Q) * inv);
+            sx = (sx < 0 ? 0 : sx >= img->w ? img->w - 1 : sx) >> L;
+            u32 v = mrow[sx < mw ? sx : mw - 1];
+            u32 al = v >> 24;
+            if (!al) continue;
+            u32 rgb = al == 255 ? v & 0xFFFFFF
+                                : (u32)((v >> 16 & 255) * 255 / al) << 16 | (u32)((v >> 8 & 255) * 255 / al) << 8
+                                  | (u32)((v & 255) * 255 / al);
+            rgb = blend(rgb, hazec, hz);
+            col[p] = al == 255 ? rgb : blend(col[p], rgb, al / 255.0f);
+            mat[p] = 7;
+        }
+    }
 }
 
 static int item_cmp(const void *pa, const void *pb)
@@ -911,6 +1209,10 @@ static int item_cmp(const void *pa, const void *pb)
 
 static void draw_item(const Item *it, int b0, int b1)
 {
+    if (it->am) {
+        draw_image(it, b0, b1);
+        return;
+    }
     const Spr *s = it->s;
     double k = it->k;
     if (s->h * k * Q < 0.75) return;
@@ -1024,18 +1326,46 @@ static float fade_alpha(int j, u16 pos, double t, uint64_t now)
     return a >= 1.0 ? 1.0f : (float)a;
 }
 
+/* AMIGA wide roads: the right half's factor at depth t (rows), interpolated like sample_road */
+static double lane_wr(double t)
+{
+    double u = t + frac;
+    if (u < 0) u = 0;
+    if (u >= nrows) u = nrows - 1e-6;
+    int i = (int)u;
+    return rows[i].wr + (rows[i + 1].wr - rows[i].wr) * (u - i);
+}
+
+/* AMIGA road signs (drive_scene.md §4.3, §4.5): signs 2..0xE on pol poles at the road's edges (bit 7: the left
+ * one), the sign 90 * s px above the row, and posts pst every 16 units at the left edge, 35 * s px up. The
+ * largest pictures are drawn at about s = 0.45 (scale_index5/4: the nearest size from s = 0.34 or 0.375); s is
+ * the Amiga row scale, the half-width over 448 px. */
+static void amiga_row_objects(const Row *r)
+{
+    double s = r->hw / 448.0, k = s / 0.45;
+    if (!(r->cnt & 0x0F) && am_pst[3])
+        add_image(am_pst[3], 1, 6, r->sx - r->hw, r->sy - 35.0 * s, k, r->Z, r->sy);
+    u8 code = r->obj & 0x3F;
+    if (code < 2 || code > 0x0E || !am_sign[code][4]) return;
+    double x = (r->obj & 0x80) ? r->sx - r->hw : r->sx + r->wr * r->hw, y = r->sy - 90.0 * s;
+    if (am_pol[4]) add_image(am_pol[4], 1, 5, x, y, k, r->Z, r->sy);
+    add_image(am_sign[code][4], 1, 4, x, y, k, r->Z, r->sy);
+}
+
 static void collect_objects(void)
 {
     nitems = 0;
     uint64_t now = host_time_ns();
 
     /* rows: poles, signs, roadside pieces */
-    for (int i = 1; i < NROWS; i++) {
+    for (int i = 1; i < nrows; i++) {
         const Row *r = &rows[i];
         double W = r->hw * 4.0;
         int idx = small_idx(W);
         double k = small_k(W, idx);
-        if (!(r->cnt & 0x0F)) {                                  /* pole every 16 units, left shoulder */
+        if (amiga.signs) {                                       /* AMIGA road signs and posts */
+            amiga_row_objects(r);
+        } else if (!(r->cnt & 0x0F)) {                           /* pole every 16 units, left shoulder */
             u16 e = (u16)(0x0FA7 + 4 * idx);
             const Spr *pol = spr_get(far_rd(DGROUP, (u16)(e + 0x10)));
             double top = r->sy - (pol ? pol->h : 8) * k;
@@ -1043,8 +1373,8 @@ static void collect_objects(void)
             add_item((u16)(e + 0x10), OP_OR, 1, 7, false, r->sx - 1.25 * r->hw, top, k, r->Z, 1.0f);
         }
         u8 t = (u8)((r->obj & 0x3F) - 2);
-        if (t <= 6) {                                            /* signs with post */
-            double x = (r->obj & 0x80) ? r->sx - r->hw : r->sx + r->hw;
+        if (t <= 6 && !amiga.signs) {                            /* signs with post */
+            double x = (r->obj & 0x80) ? r->sx - r->hw : r->sx + r->wr * r->hw;
             u16 post = (u16)(0x1123 + 4 * idx);
             u16 img = (u16)(0x1043 + (t << 5) + 8 * idx);
             const Spr *ps = spr_get(far_rd(DGROUP, post));
@@ -1079,7 +1409,8 @@ static void collect_objects(void)
                    + track_ahead(&trk_car[j]) - view_ahead;      /* both carried on from the last step */
         double X, Y, Z;
         if (t < 0.4 || !sample_road(t, &X, &Y, &Z)) continue;
-        double Xl = X + (j < 5 ? -ROAD_HW / 2 : ROAD_HW / 2);
+        /* AMIGA wide roads: the cars going our way keep to the outer lane (queue_slot_car: right edge - 0xE0) */
+        double Xl = X + (j < 5 ? -ROAD_HW / 2 : ROAD_HW * (lane_wr(t) - 0.5));
         u8 ts = traffic_scale(Z);
         u16 e = (u16)(ts + DSW((u16)(si + 6)));
         double k = traffic_k(Z, ts);
@@ -1119,7 +1450,7 @@ static void collect_objects(void)
     /* hazard (slot 12) */
     u16 hp = DSW(DS_r_hazard_slot);
     s16 hr = (s16)(u16)(hp - base_pos);
-    if (hp != 0 && hr >= 1 && hr < NROWS) {
+    if (hp != 0 && hr >= 1 && hr < nrows) {
         double X, Y, Z;
         if (sample_road(hr - frac, &X, &Y, &Z)) {
             u16 w6 = DSW((u16)(DS_r_hazard_slot + 6));
@@ -1227,10 +1558,13 @@ static void *xrealloc(void *p, size_t n)
     return q;
 }
 
+static int buf_h;                          /* WIN_H the buffers were made for */
+
 static bool ensure_buffers(void)
 {
     int k = gfx_output_scale();
-    if (k == OK && col) return true;
+    if (k == OK && col && buf_h == WIN_H) return true;
+    buf_h = WIN_H;
     OK = k;
     SSF = k == 1 ? 4 : 2;
     Q = OK * SSF;
@@ -1335,7 +1669,7 @@ static void update_cover(void)
         int len = (int)strlen(s);
         cover_rect(0xA0 - 4 * len, 0x50, 8 * len, DSW(DS_text_glyph_h));
     }
-    for (int k = 0; k < 4; k++) memcpy(vram_snap[k], gfx_ega_plane(k) + WIN_Y0 * 40, sizeof vram_snap[k]);
+    for (int k = 0; k < 4; k++) memcpy(vram_snap[k], gfx_ega_plane(k), sizeof vram_snap[k]);
 }
 
 /* Test Drive II's distance and time readout (its ROAD.PES dgt0..9 and <car>DASH.PES "time" sprites, at the
@@ -1434,13 +1768,16 @@ static void ov_draw(u32 *px, int k)
     for (int y = WIN_Y0; y < WIN_Y1; y++) {
         const u8 *p0 = gfx_ega_plane(0) + y * 40, *p1 = gfx_ega_plane(1) + y * 40;
         const u8 *p2 = gfx_ega_plane(2) + y * 40, *p3 = gfx_ega_plane(3) + y * 40;
-        const u8 *s0 = vram_snap[0] + (y - WIN_Y0) * 40, *s1 = vram_snap[1] + (y - WIN_Y0) * 40;
-        const u8 *s2 = vram_snap[2] + (y - WIN_Y0) * 40, *s3 = vram_snap[3] + (y - WIN_Y0) * 40;
+        const u8 *s0 = vram_snap[0] + y * 40, *s1 = vram_snap[1] + y * 40;
+        const u8 *s2 = vram_snap[2] + y * 40, *s3 = vram_snap[3] + y * 40;
+        /* AMIGA dashboards: outside the original's window the EGA image is its roof and dash: never shown */
+        bool ega = y >= DOS_Y0 && y < DOS_Y1;
         for (int bx = 0; bx < 40; bx++) {
             u8 changed = (u8)((p0[bx] ^ s0[bx]) | (p1[bx] ^ s1[bx]) | (p2[bx] ^ s2[bx]) | (p3[bx] ^ s3[bx]));
+            if (!ega) changed = 0;
             for (int b = 0; b < 8; b++) {
                 int x = bx * 8 + b;
-                if (cover[y * 320 + x] || (changed & (0x80 >> b))) continue;
+                if ((ega && cover[y * 320 + x]) || (changed & (0x80 >> b))) continue;
                 for (int j = 0; j < k; j++) {
                     u32 *d = px + (size_t)(y * k + j) * OW + (size_t)x * k;
                     const u32 *s = out + (size_t)((y - WIN_Y0) * k + j) * OW + (size_t)x * k;
@@ -1449,6 +1786,17 @@ static void ov_draw(u32 *px, int k)
             }
         }
     }
+    const u32 *dash = amiga_dash_layer();              /* AMIGA dashboards: the cockpit over everything */
+    if (dash)
+        for (int y = 0; y < 200; y++)
+            for (int x = 0; x < 320; x++) {
+                u32 c = dash[y * 320 + x];
+                if (!(c >> 24)) continue;
+                for (int j = 0; j < k; j++) {
+                    u32 *d = px + (size_t)(y * k + j) * OW + (size_t)x * k;
+                    for (int i = 0; i < k; i++) d[i] = c & 0xFFFFFF;
+                }
+            }
     draw_cracks(px, k);
     draw_timer(px, k);
     stats_add(&stats_overlay_ms, t0);
@@ -1467,6 +1815,13 @@ void enh_init(void)
 void enh_stage_begin(void)
 {
     cache_clear();
+    amimg_clear();
+    amiga_art_load();
+    bool dash = amiga.dashboards && amiga_dash_begin();   /* AMIGA dashboards: the Amiga's road window */
+    win_y0 = dash ? 0 : DOS_Y0;
+    win_y1 = dash ? 117 : DOS_Y1;
+    cloud_view = 1e9;
+    cloud_ns = 0;
     active = false;
     sm_valid = false;
     last_ns = 0;
@@ -1485,8 +1840,10 @@ void enh_stage_begin(void)
 void enh_stage_end(void)
 {
     active = false;
+    amiga_dash_end();
     ncracks = 0;
     cache_clear();
+    amimg_clear();
     dirty = true;
 }
 

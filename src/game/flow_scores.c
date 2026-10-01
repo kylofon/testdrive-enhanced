@@ -70,7 +70,7 @@ void scores_enter_name(s32 score, int car, char *names, s32 *scores, char *cars)
     char name[20];
     memset(name, 0, sizeof name);
     gfx_clear_screen(0);
-    snd_play_oneshot(far_rd(DGROUP, DS_g_songHiScore));
+    flow_song_play(DS_g_songHiScore);                     /* AMIGA: or the Amiga song */
     gfx_select_target(gfx_screen_desc());
     FarPtr ll = load_archive(DSTR(0x2EA), 2000);          /* "llogo.pes" */
     blit_copy_own(res_find(ll, flow_car_name(car)));      /* 4-char match "coun", "lotu", ... */
@@ -93,7 +93,7 @@ void scores_enter_name(s32 score, int car, char *names, s32 *scores, char *cars)
         strncpy(cars + i * 20, flow_car_name(car), 20);
         scores[i] = score;
     }
-    snd_stop_oneshot();
+    flow_song_stop();
 }
 
 /* 0x162E scores_save — game_flow.md §4 (verified) */

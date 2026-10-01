@@ -33,9 +33,18 @@ game/flow*.c        game_flow spec: main (game_main), screens, run_game, run_sta
 game/scene*.c       scene_render spec: projection, road/object drawing, cockpit, crash, ending     (scene agent)
 game/sim*.c         simulation spec: stage setup 0x4792, driving ISR 0x3B1F and everything it runs (sim agent)
 enhanced/*          enhanced road renderer and overlay (not bound by these rules)
+amiga/*             the Amiga release's engine (test-drive-sdl3 tdport/src/amiga), names prefixed by anames.h
+game/flow_amiga.c, game/sim_amiga.c, enhanced/enh_amiga_dash.c   the --amiga features (not bound by these rules)
 ```
 
-Only `host.c` and `main.c` include SDL. Game and platform code talks to the host through `host.h`.
+The Amiga features (`amiga_opts.h`) are marked `AMIGA:` where they change the faithful code. `src/amiga` is the
+Amiga port's engine, compiled with `amiga/anames.h` force-included so its globals (`run_game`, `car_select`, ...)
+become `am_*` and don't clash with this game's; regenerate that header when the engine gains a global. Its host
+(`amiga/ahost.c`) borrows this game's window, keyboard and gamepad through `host_set_pump_hook`,
+`host_set_key_hook` and `host_save_frame_source` / `host_restore_frame_source`.
+
+Only `host.c`, `main.c`, `keybind.c` and the Amiga engine's host `amiga/ahost.c` include SDL. Game and platform
+code talks to the host through `host.h`.
 
 ## Memory model (`mem.h`)
 
@@ -95,6 +104,10 @@ cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ./build/testdrive-enhanced.exe --game-dir Game --check
 ```
+
+Developer aids: `TD_ENH_DEMO=1` goes straight to an attract-mode drive with the first car (the autopilot drives),
+`TD_ENH_STAGE=n` (0..4) and `TD_ENH_UNIT=n` start the first drive on stage n, n road units in, and
+`TD_ENH_SHOT=<folder>` saves the shown frame there once a second as BMP.
 
 `TD_ENH_STATS=1` prints the enhanced renderer's timings on stderr every 300 frames: render and overlay
 times and the rate the frames were actually produced at (the stage loop asks for `--frame-rate`, but a frame

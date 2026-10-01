@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.0
+
+- Launcher (`Test Drive Enhanced.exe`): the version (PC or Amiga), the game folders and the options, with menus
+  (File > Preferences with Always on top, Game settings, About), Game settings > Graphics and Game settings > Key
+  Bindings.
+- Amiga features (`--amiga`, `--amiga-disk`), each on its own or all together: the Amiga intro, menu, dashboards,
+  music, projection, sky, cliffs, traffic speed, cops, wide roads and road signs. They need the Amiga disk.
+- Key bindings while driving (`--keys`).
+- `--fullscreen`.
+- Developer aids: `TD_ENH_DEMO=1` (straight to an attract-mode drive), `TD_ENH_STAGE=n`, `TD_ENH_UNIT=n` (start
+  stage n, n units in) and `TD_ENH_SHOT=<folder>` (the shown frame once a second as BMP).
+
 ## v1.0.4
 
 - The speedometer needle follows the car past 160 mph. The Countach and Testarossa reach about 172 and 175 mph,

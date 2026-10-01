@@ -4,7 +4,9 @@ An enhanced version of the EGA *Test Drive* (1987) by Accolade / Distinctive Sof
 SDL3. The game itself is the faithful C reimplementation from
 [test-drive-sdl3](https://github.com/kylofon/test-drive-sdl3), so driving, traffic, police and the game flow
 work as in the original. The view through the windscreen is redrawn at a higher resolution, further draw
-distance and 60 fps. It is not an emulator - the original data is not redistributed, and you need to get it yourself.
+distance and 60 fps. Parts of the Amiga release can be mixed in: its intro, menus, cockpits, music, road, sky,
+cliffs, signs, traffic and police (see [Amiga features](#amiga-features)). It is not an emulator - the original
+data is not redistributed, and you need to get it yourself.
 
 ## How to play (Windows)
 
@@ -19,13 +21,16 @@ You need the files of the original DOS *Test Drive*. They are not included.
    ```text
    Test Drive\
    ├── Game\                    <- your original game files (TDEGA.EXE, CARS.TXT, SCORES, ...)
-   ├── testdrive-enhanced.exe
+   ├── Game Amiga\              <- optional: the Amiga disk image (.adf), for the Amiga features
+   ├── Test Drive Enhanced.exe  <- the launcher
+   ├── testdrive-enhanced.exe   <- the game
    ├── SDL3.dll
    ├── libiconv-2.dll
    └── (the other files from the zip)
    ```
 
-4. Double-click `testdrive-enhanced.exe`.
+4. Double-click `Test Drive Enhanced.exe`, choose **PC** or **Amiga** and the options, and press **Play**
+   (or start `testdrive-enhanced.exe` directly).
 
 Keep the folder somewhere you can save files, such as Documents or the Desktop, not Program Files. The game
 saves its high scores in `Game`. If Windows says "Windows protected your PC", click **More info**, then
@@ -36,7 +41,10 @@ If driving stutters on an older PC, see `--res-scale` under [Run](#run).
 
 * Your game files in a folder. The game needs `TDEGA.EXE`, `CARS.TXT`, `SCORES`, `TDSND.SND`, the `*.PES`
   archives and the car `*.BIN` / `*.SS` files. By default it looks in `Game` under the working directory.
-* CMake 3.24+, a C11 compiler and SDL 3.
+* For the Amiga features, the Amiga release's disk too: the `.adf`, a folder holding it, or a folder with the files
+  from it (default `Game Amiga`).
+* CMake 3.24+, a C11 compiler and SDL 3. The launcher needs a C++17 compiler and wxWidgets 3.2 (it is left out
+  when wxWidgets isn't found, or with `-DTDE_LAUNCHER=OFF`).
 * A multi-core CPU for the default resolution. Rendering is split across all cores.
 
 ## Build
@@ -69,9 +77,45 @@ Or `make run GAME_DIR=Game SCALE=3`.
 | `--frame-rate FPS` | Drawing rate while driving (default 60, `0` = unpaced) |
 | `--sprite-detail max\|auto` | Sprite sizes: `max` (default) the most detailed sprite everywhere, `auto` chosen by distance |
 | `--bios-keys` | Original keyboard behaviour for driving: keys act only through key repeat (see below) |
+| `--fullscreen` | Start in full screen |
+| `--keys NAME=CODE,...` | Key bindings while driving (the launcher's Game settings > Key Bindings; names in `src/keybind.c`) |
+| `--amiga LIST` | Amiga features: `all`, or any of `intro,menu,dashboards,music,projection,sky,cliffs,traffic,cops,wide-roads,signs` |
+| `--amiga-disk PATH` | The Amiga disk: the `.adf`, a folder holding it, or a folder with its files (default `Game Amiga`) |
 | `--check` | Verify `TDEGA.EXE` loads and exit, without opening a window |
 
 Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA monitor.
+
+## Launcher
+
+`Test Drive Enhanced.exe` starts the game with the options chosen in its window: the version (**PC**, or **Amiga**
+with the Amiga features to mix in), the game folders, the window, and under **Game settings** the **Graphics**
+(resolution, sprite detail, frame rate) and the **Key Bindings**. See [`launcher/README.md`](launcher/README.md).
+
+## Amiga features
+
+The Amiga release of *Test Drive* runs on the same roads, but draws and plays them differently. With `--amiga`
+(the launcher's **Amiga** version) any mix of these replaces the DOS game's own; the Amiga disk is read for its
+pictures, shapes, songs and program. The game underneath stays the DOS one.
+
+* **Intro:** the Amiga title sequence (Accolade, the car driving off, the logo).
+* **Menu:** the Amiga showroom to choose the car, and its "play again / new car" menu.
+* **Dashboards:** each car's Amiga cockpit, its dashboard, gauges, steering wheel, gear knob, roof, window post,
+  hood and mirror frame; the road fills the screen above it.
+* **Music:** the Amiga songs, played on an emulated Paula, for the intro, the showroom, the gas station, the high
+  scores and the ending.
+* **Projection:** the road's shape as the Amiga draws it: rows further apart with distance, bends turning half as
+  fast and up to 90 degrees, crests that build up with distance.
+* **Sky:** the Amiga's blue sky with four clouds drifting and turning with the road, instead of the mountains.
+* **Cliffs:** the brown rock face, with the slant of the Amiga's cliff edge.
+* **Traffic:** the cars drive at the speed limit, the RX-7 a quarter faster, at their own speeds before the first
+  sign of a stage, and slower in the outer lane of a wide road.
+* **Cops:** a radar trap goes off at more than 15 mph over the limit; the patrol car starts further back at a
+  steady 108 mph (4 mph more each stage), tails you, passes and stops you, but never near the end of a stage.
+* **Wide roads:** the passing lanes of stages 1 and 2, which the DOS version leaves out: the road widens to the
+  right with lane marks and a solid centre line, the slow traffic keeps to the outer lane, and you can pass in the
+  inner one.
+* **Signs:** the Amiga's signs and posts, with its speed limits of 30, 55 and 65 mph, and the passing-lane and
+  merge signs.
 
 ## Controls (from the original)
 
@@ -80,6 +124,7 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 * Ctrl-J / Ctrl-K: joystick / keyboard control. A connected gamepad acts as the joystick (left stick or
   D-pad, A = fire).
 * Ctrl-Q / Ctrl-S: sound off / on.
+* The launcher's Game settings > Key Bindings moves the driving and game keys to others.
 
 ## Changes from original
 
@@ -115,6 +160,7 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 * **Removed:** copy protection, the TD.EXE launcher password, and Hercules / CGA modes.
 * **Missing SCORES:** starts with an empty table instead of exiting.
 * **Extended-ASCII keys:** ignored instead of crashing.
+* **Key bindings:** the driving and game keys can be moved to others (`--keys`).
 
 ## Layout
 
@@ -123,7 +169,11 @@ See `ENGINE.md` for the architecture and the rules the engine follows. In short:
 * `src/mem.*` emulates the real-mode address space the game ran in.
 * `src/host.*` wraps SDL3 and runs the render worker threads.
 * `src/platform/` holds the EGA graphics, timer/sound, input and resource layers.
-* `src/game/` holds game flow, scene rendering and simulation.
+* `src/game/` holds game flow, scene rendering and simulation; `flow_amiga.c` and `sim_amiga.c` the Amiga
+  features of the flow and the simulation.
+* `src/amiga/` holds the Amiga release's engine from test-drive-sdl3 (its globals renamed by `anames.h`), with a
+  host on top of this game's (`ahost.c`) and the parts the Amiga features use (`abridge.h`, `aimage.c`).
+* `launcher/` holds the wxWidgets launcher.
 
 Reverse-engineering tools, specs and file formats are in
 [test-drive-sdl3](https://github.com/kylofon/test-drive-sdl3).
@@ -131,6 +181,14 @@ Reverse-engineering tools, specs and file formats are in
 ## License
 
 MIT, see [LICENSE](LICENSE). *Test Drive* and its data belong to their respective owners.
+
+The Amiga engine draws its text with a recreation of the Amiga's `topaz.font`:
+
+> The FontStruction "Amiga Topaz" (https://fontstruct.com/fontstructions/show/675155) by Patrick H. Lauke is
+> licensed under a Creative Commons Attribution license (http://creativecommons.org/licenses/by/3.0/).
+
+It is rasterised to 8x8 cells in `src/amiga/font8.c` (the only change made to it); the font archive and its licence
+are in `licenses/amiga-topaz/`.
 
 ## Support
 

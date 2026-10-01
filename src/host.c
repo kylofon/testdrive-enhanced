@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "keybind.h"
+
 #define AUDIO_RATE 44100
 #define AUDIO_AMPLITUDE 5000
 
@@ -83,7 +85,13 @@ void host_shutdown(void)
     SDL_Quit();
 }
 
+void host_set_fullscreen(bool on) { SDL_SetWindowFullscreen(window, on); }
+
 void host_set_tick_handler(void (*handler)(void)) { tick_handler = handler; }
+
+static bool frame_sharp;
+static struct { bool (*compose)(u32 *); int w, h; bool sharp; } saved_source;
+
 void host_set_frame_source(bool (*compose)(u32 *), int w, int h)
 {
     frame_source = compose;
@@ -94,10 +102,42 @@ void host_set_frame_source(bool (*compose)(u32 *), int w, int h)
     frame_h = h;
     if (texture) SDL_DestroyTexture(texture);
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
-    /* 320x200 (times the output scale) shown with 4:3 aspect, as on a 200-line EGA monitor. */
-    SDL_SetRenderLogicalPresentation(renderer, w, h * 6 / 5, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    SDL_SetTextureScaleMode(texture, w > 320 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+    /* Shown with 4:3 aspect: 320x200 (times the output scale) as on a 200-line EGA monitor, and the Amiga
+     * engine's 640x200 (lowres pixels doubled) as on its monitor. */
+    SDL_SetRenderLogicalPresentation(renderer, w, w * 3 / 4, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    host_set_frame_sharp(frame_sharp);
 }
+
+void host_set_frame_sharp(bool on)
+{
+    frame_sharp = on;
+    if (!texture) return;
+#if SDL_VERSION_ATLEAST(3, 4, 0)
+    if (on && SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_PIXELART)) return;
+#endif
+    SDL_SetTextureScaleMode(texture, on || frame_w <= 320 ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR);
+}
+
+void host_save_frame_source(void)
+{
+    saved_source.compose = frame_source;
+    saved_source.w = frame_w;
+    saved_source.h = frame_h;
+    saved_source.sharp = frame_sharp;
+}
+
+void host_restore_frame_source(void)
+{
+    if (!saved_source.compose) return;
+    frame_sharp = saved_source.sharp;
+    host_set_frame_source(saved_source.compose, saved_source.w, saved_source.h);
+    host_set_frame_sharp(saved_source.sharp);
+}
+
+static bool (*key_hook)(int, int, bool, bool);
+static void (*pump_hook)(void);
+void host_set_key_hook(bool (*hook)(int scancode, int mod, bool down, bool repeat)) { key_hook = hook; }
+void host_set_pump_hook(void (*hook)(void)) { pump_hook = hook; }
 
 static Uint64 tick_due_ns(Uint64 n)
 {
@@ -128,13 +168,33 @@ static void audio_for_one_tick(void)
     SDL_PutAudioStreamData(audio, buf, n * (int)sizeof(s16));
 }
 
+/* Developer aid: TD_ENH_SHOT=<folder> saves the shown frame there once a second (shot0000.bmp, ...). */
+static void shot(void)
+{
+    static const char *dir;
+    static bool checked;
+    static Uint64 next_ns;
+    static int n;
+    if (!checked) { dir = SDL_getenv("TD_ENH_SHOT"); checked = true; }
+    Uint64 now = SDL_GetTicksNS();
+    if (!dir || now < next_ns) return;
+    next_ns = now + SDL_NS_PER_SECOND;
+    SDL_Surface *s = SDL_CreateSurfaceFrom(frame_w, frame_h, SDL_PIXELFORMAT_XRGB8888, frame, frame_w * 4);
+    if (!s) return;
+    char path[1024];
+    SDL_snprintf(path, sizeof path, "%s/shot%04d.bmp", dir, n++);
+    SDL_SaveBMP(s, path);
+    SDL_DestroySurface(s);
+}
+
 static void present(void)
 {
     if (!texture) return;
+    shot();
     SDL_UpdateTexture(texture, NULL, frame, frame_w * 4);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
-    SDL_FRect dst = { 0, 0, (float)frame_w, (float)(frame_h * 6 / 5) };
+    SDL_FRect dst = { 0, 0, (float)frame_w, (float)(frame_w * 3 / 4) };
     SDL_RenderTexture(renderer, texture, NULL, &dst);
     SDL_RenderPresent(renderer);
 }
@@ -152,6 +212,7 @@ void host_present_now(void)
 void host_pump(void)
 {
     process_events();
+    if (pump_hook) pump_hook();
 
     bool worked = false;
     Uint64 now = SDL_GetTicksNS();
@@ -330,16 +391,18 @@ bool host_xt_key_down(u8 xt)
      * game maps to fire + direction through the key buffer. */
     bool num = (SDL_GetModState() & SDL_KMOD_NUM) != 0;
 #define KP(sc) (!num && ks[sc])
+    /* PORT: A, Z and the arrows are the keys of their actions (keybind.h); Home, PgUp, End, PgDn and the keypad
+     * keep their job. */
     switch (xt) {
-    case 0x1E: return ks[SDL_SCANCODE_A];
-    case 0x2C: return ks[SDL_SCANCODE_Z];
+    case 0x1E: return kb_held(KB_SHIFT_UP);
+    case 0x2C: return kb_held(KB_SHIFT_DOWN);
     case 0x47: return ks[SDL_SCANCODE_HOME]     || KP(SDL_SCANCODE_KP_7);
-    case 0x48: return ks[SDL_SCANCODE_UP]       || KP(SDL_SCANCODE_KP_8);
+    case 0x48: return kb_held(KB_ACCELERATE)    || KP(SDL_SCANCODE_KP_8);
     case 0x49: return ks[SDL_SCANCODE_PAGEUP]   || KP(SDL_SCANCODE_KP_9);
-    case 0x4B: return ks[SDL_SCANCODE_LEFT]     || KP(SDL_SCANCODE_KP_4);
-    case 0x4D: return ks[SDL_SCANCODE_RIGHT]    || KP(SDL_SCANCODE_KP_6);
+    case 0x4B: return kb_held(KB_STEER_LEFT)    || KP(SDL_SCANCODE_KP_4);
+    case 0x4D: return kb_held(KB_STEER_RIGHT)   || KP(SDL_SCANCODE_KP_6);
     case 0x4F: return ks[SDL_SCANCODE_END]      || KP(SDL_SCANCODE_KP_1);
-    case 0x50: return ks[SDL_SCANCODE_DOWN]     || KP(SDL_SCANCODE_KP_2);
+    case 0x50: return kb_held(KB_BRAKE)         || KP(SDL_SCANCODE_KP_2);
     case 0x51: return ks[SDL_SCANCODE_PAGEDOWN] || KP(SDL_SCANCODE_KP_3);
 #undef KP
     default:   return false;
@@ -415,6 +478,14 @@ static u16 bios_key(SDL_Keycode k, SDL_Scancode sc, SDL_Keymod mod)
     return 0;
 }
 
+/* The BIOS key word of each action's default key (keybind.h; 0 = not a DOS action). */
+static const u16 BINDING_KEYS[KB_COUNT] = {
+    [KB_ACCELERATE] = 0x4800, [KB_BRAKE] = 0x5000, [KB_STEER_LEFT] = 0x4B00, [KB_STEER_RIGHT] = 0x4D00,
+    [KB_SHIFT_UP] = 0x1E61,   [KB_SHIFT_DOWN] = 0x2C7A,
+    [KB_PAUSE] = 0x1970,      [KB_GEARBOX] = 0x2064,   [KB_GATE] = 0x186F,
+    [KB_SOUND_OFF] = 0x1011,  [KB_SOUND_ON] = 0x1F13,  [KB_JOYSTICK] = 0x240A, [KB_KEYBOARD] = 0x250B,
+};
+
 static void process_events(void)
 {
     SDL_Event ev;
@@ -423,12 +494,22 @@ static void process_events(void)
         case SDL_EVENT_QUIT:
             host_shutdown();
             exit(0);
+        case SDL_EVENT_KEY_UP:
+            if (key_hook) key_hook(ev.key.scancode, ev.key.mod, false, false);
+            break;
         case SDL_EVENT_KEY_DOWN: {
             /* Alt+Enter toggles fullscreen; everything else goes to the BIOS buffer, repeats included. */
             if (ev.key.key == SDLK_RETURN && (ev.key.mod & SDL_KMOD_ALT)) {
                 if (!ev.key.repeat)
                     SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
                 break;
+            }
+            if (key_hook && key_hook(ev.key.scancode, ev.key.mod, true, ev.key.repeat)) break;
+            if (kb_active()) {                      /* PORT: key bindings while driving */
+                bool drop;
+                int a = kb_lookup((u16)(kb_key(ev.key.scancode) | kb_mods(ev.key.mod)), &drop);
+                if (a >= 0) kbd_push(BINDING_KEYS[a]);
+                if (a >= 0 || drop) break;
             }
             u16 key = bios_key(ev.key.key, ev.key.scancode, ev.key.mod);
             if (key) kbd_push(key);

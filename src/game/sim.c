@@ -6,6 +6,8 @@
  * values that cross labels (stale CH/BH, DX from sim_update_rpm, BX of the look-ahead) behave as in the
  * original. All game state is in mem[]. */
 #include "game.h"
+#include "sim_amiga.h"
+#include "../amiga_opts.h"
 #include "../platform/timer.h"
 #include "../platform/input.h"
 #include "../platform/res.h"
@@ -543,7 +545,7 @@ static Label sim_advance_unit(Reg *r)
         r->ax = (u16)(r->ax << 1);
         r->ax = (u16)(r->ax + DSW(DS_car_x));
         DSW(DS_car_x) = r->ax;
-        if ((s16)r->ax > 0x264 || (s16)r->ax < -0x236)
+        if ((s16)r->ax > 0x264 || (s16)r->ax < -0x236 - sim_amiga_extra_right())   /* AMIGA: wide roads */
             DSB(DS_run_state) = 3;                         /* 0x419D off the road */
     }
 
@@ -574,6 +576,7 @@ static Label sim_advance_unit(Reg *r)
         if (t >= 0 && (s8)LO(r->cx) < 3) {
             r->cx = setlo(r->cx, (u8)(LO(r->cx) << 1));
             DSB(DS_speed_limit_idx) = LO(r->cx);           /* low byte only */
+            sim_amiga_sign();                              /* AMIGA */
         }
     }
     DSB(DS_road_anim_counter)++;
@@ -706,6 +709,8 @@ static Label sim_traffic_update(Reg *r)
             r->bp = (u16)(DSW(r->si) - DSW(DS_road_pos_prev));
             r->bx = DSW(DS_speed_limit_idx);
             r->ax = DSW(DS_traffic_speed_table + r->bx);
+            if (sim_amiga_rules())                         /* AMIGA traffic speed, signs */
+                r->ax = sim_amiga_traffic_speed(r->ax, (u16)(DSW(r->si + 6) / 40), false);
             r->bx = DSW(r->si);
             int t = (s16)DSW(r->si + 2) - (s16)r->ax;
             r->dx = (u16)t;
@@ -747,6 +752,8 @@ static Label sim_traffic_update(Reg *r)
         } else {
             r->bx = DSW(DS_speed_limit_idx);
             r->ax = DSW(DS_traffic_speed_table + r->bx);
+            if (sim_amiga_rules())                         /* AMIGA traffic speed, signs */
+                r->ax = sim_amiga_traffic_speed(r->ax, (u16)(DSW(r->si + 6) / 40), true);
         }
         r->bx = DSW(r->si);
         int t = (s16)DSW(r->si + 2) - (s16)r->ax;
@@ -768,7 +775,8 @@ static Label sim_traffic_update(Reg *r)
         if (!((s16)r->bp > 0)) {
             if (!((s16)r->ax > 6))                         /* cars behind never hit you */
                 r->bx = (u16)(DSW(DS_road_pos) - 6);
-        } else if (!((s16)r->ax < -1) && !((s16)DSW(DS_car_x) > 0x6C)) {
+        } else if (!((s16)r->ax < -1) && !((s16)DSW(DS_car_x) > 0x6C - sim_amiga_extra_right())) {
+            /* AMIGA wide roads: the car going our way keeps to the outer lane, the inner one is free */
             r->bx = DSW(DS_road_pos);                      /* 0x436E rear-end collision */
             r->dx = DSW(DS_sub_unit);
             r->bx++;
@@ -810,8 +818,10 @@ static Label sim_cop_fsm(Reg *r)
     case 0x43A4:                                           /* 1 chase */
         r->ax = DSW(DS_cop_speed);
         cop_adv(r);
-        r->ax = (u16)(r->ax + 2);
-        if (!((s16)r->ax < 0x78)) r->ax = (u16)(r->ax - 2);
+        if (!amiga.cops) {                                 /* AMIGA cops: a constant speed */
+            r->ax = (u16)(r->ax + 2);
+            if (!((s16)r->ax < 0x78)) r->ax = (u16)(r->ax - 2);
+        }
         DSW(DS_cop_speed) = r->ax;
         r->cx = setlo(r->cx, DSB(DS_cop_block_idx));
         if (LO(r->cx) != 0) {                              /* Q9: index may name the wrong car */
@@ -823,13 +833,15 @@ static Label sim_cop_fsm(Reg *r)
                 DSB(DS_cop_state) = 2;
             }
         }
-        r->ax = (u16)(DSW(DS_road_pos) - 3);               /* 0x43E7 */
+        /* AMIGA cops: they tail 12 units behind for 70 ticks, and never pass within 400 units of the end */
+        r->ax = (u16)(DSW(DS_road_pos) - (amiga.cops ? 12 : 3));   /* 0x43E7 */
         if ((s16)r->ax > (s16)r->bx) {
-            DSB(DS_cop_tail_timer) = 0x78;                 /* 0x440C */
+            DSB(DS_cop_tail_timer) = amiga.cops ? 0x46 : 0x78;   /* 0x440C */
         } else {
             r->bx = r->ax;
             r->dx = DSW(DS_sub_unit);
-            if (DSW(DS_speed) == 0 || --DSB(DS_cop_tail_timer) == 0)
+            if (amiga.cops && sim_amiga_near_end()) DSB(DS_cop_tail_timer) = 0x46;
+            else if (DSW(DS_speed) == 0 || --DSB(DS_cop_tail_timer) == 0)
                 DSB(DS_cop_state) = 3;
         }
         break;
@@ -864,6 +876,7 @@ static Label sim_cop_fsm(Reg *r)
         r->dx = DSB(DS_cop_lane_curve + r->bx);
         DSW(DS_cop_lateral) = r->dx;
         r->bx = (u16)((r->bx >> 3) - 3);
+        if (amiga.cops) r->bx = (u16)(r->ax * 25 / 0x30 - 12);   /* AMIGA cops: from 12 behind to 13 ahead */
         r->bx = (u16)(r->bx + DSW(DS_road_pos));
         r->dx = DSW(DS_sub_unit);
         if (LO(r->ax) == 0x30) {
@@ -1001,7 +1014,7 @@ static Label sim_object_cleanup(Reg *r)
         if (passed) {                                      /* 0x460B */
             DSW(r->bx) = 0;
             if (DSB(DS_cop_state) != 0) {                  /* was 7: start the chase */
-                r->dx = (u16)(r->ax - 0xA);
+                r->dx = (u16)(r->ax - (amiga.cops ? 0x1E : 0xA));   /* AMIGA cops: 30 units behind */
                 r->si = DS_samedir_list;
                 r->cx = setlo(r->cx, 0);
                 if (LO(r->cx) != DSB(DS_samedir_count)) {
@@ -1014,7 +1027,7 @@ static Label sim_object_cleanup(Reg *r)
                 }
                 DSW(DS_cop_pos) = r->dx;                   /* 0x4637 */
                 DSB(DS_cop_state) = 1;
-                DSW(DS_cop_speed) = 0x3C;
+                DSW(DS_cop_speed) = amiga.cops ? sim_amiga_cop_speed() : 0x3C;
                 DSB(DS_cop_block_idx) = LO(r->cx);
                 DSW(DS_cop_lateral) = 0;
                 DSW(DS_cop_sub) = 0;
@@ -1024,6 +1037,7 @@ static Label sim_object_cleanup(Reg *r)
         } else if (!((s16)r->dx > 8)) {
             r->si = DSW(DS_speed_limit_idx);
             r->cx = DSW(DS_trap_speed_table + r->si);
+            if (sim_amiga_rules()) r->cx = sim_amiga_trap_speed(r->cx);   /* AMIGA cops, signs */
             if (!(r->cx > DSW(DS_speed)))                  /* ja */
                 DSB(DS_cop_state) = 7;
         }

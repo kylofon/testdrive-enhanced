@@ -38,6 +38,15 @@ void  showroom_drive_away(int idx);                                 /* 0x0D75 */
 void  read_line_strip(char *buf, int n, FlowText *f);               /* 0x1000 */
 int   credits_show(void);                                           /* 0x186E */
 
+/* ---- flow_amiga.c (AMIGA: the --amiga features of the flow) */
+void  flow_amiga_start(void);                                       /* opens the Amiga disk if a feature needs it */
+int   flow_amiga_intro(void);                                       /* as run_intro */
+int   flow_amiga_car_select(void);                                  /* as car_select */
+int   flow_amiga_play_again(void);                                  /* as play_again_menu (no Esc) */
+void  flow_song_play(u16 ds_song);                                  /* snd_play_oneshot of DS:ds_song, or Amiga's */
+void  flow_song_stop(void);                                         /* snd_stop_oneshot, and the Amiga song */
+void  flow_ending_song(bool on);                                    /* Amiga music: EndSuccess at the dealership */
+
 /* ---- flow_scores.c */
 int   high_scores(s32 new_score);                                   /* 0x12DB */
 void  scores_load(char *names, s32 *scores, char *cars);            /* 0x1369 */
