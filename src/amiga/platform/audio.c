@@ -51,6 +51,8 @@
 #define ADDR_SONG_VBL_NAME  0x127E8u    /* "Song VBLInt" */
 #define ADDR_LEVEL4_VECTOR  0x70u
 
+#define SONG_HZ             50          /* PORT: the song player's tick rate (PAL VBL), see song_vbl_server */
+
 static APTR chan(u16 ch) { return DADDR(D_sfx_chan + (u32)ch * 0x1E); }
 static APTR track(int k) { return DADDR(D_song_track + (u32)k * 0x18); }
 
@@ -406,9 +408,15 @@ static bool smus_find_long(APTR base, u16 *off, u32 limit, u32 id)
     return false;
 }
 
-/* 0x12A54: Song VBLInt, priority 0x20. */
+/* 0x12A54: Song VBLInt, priority 0x20. PORT: the songs were timed on a PAL machine (50 VBL a second, quarter
+ * note = 24 ticks = 0.48 s), so on the port's 60 Hz VBL the server skips every sixth tick to keep their tempo. */
 static void song_vbl_server(void)
 {
+    static u32 phase;
+    phase += SONG_HZ;
+    if (phase < VBL_HZ) return;
+    phase -= VBL_HZ;
+
     if (D16(D_song_state) == 0) return;
     song_volume_slide();
 
