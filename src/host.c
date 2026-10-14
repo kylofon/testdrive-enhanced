@@ -200,6 +200,7 @@ static void present(void)
 }
 
 static Uint64 last_present_ns;
+static bool repaint;  /* the window changed size or mode: present the unchanged frame again */
 
 void host_present_now(void)
 {
@@ -229,7 +230,8 @@ void host_pump(void)
 
     /* Present at most once per ~8 ms; VSync paces it further. */
     if (frame_source && now - last_present_ns >= 8 * SDL_NS_PER_MS) {
-        if (frame_source(frame)) {
+        if (frame_source(frame) || repaint) {
+            repaint = false;
             present();
             last_present_ns = SDL_GetTicksNS();
             worked = true;
@@ -515,6 +517,12 @@ static void process_events(void)
             if (key) kbd_push(key);
             break;
         }
+        case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:     /* Alt+Enter, resizing, a static picture: redraw it */
+        case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+        case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+        case SDL_EVENT_WINDOW_EXPOSED:
+            repaint = true;
+            break;
         case SDL_EVENT_GAMEPAD_ADDED:
             if (!gamepad) gamepad = SDL_OpenGamepad(ev.gdevice.which);
             break;
