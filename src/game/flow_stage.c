@@ -280,6 +280,7 @@ int run_stage(void)
         snd_stop_all();
         DSB(DS_clock_running) = 0;
         DSW(DS_g_stageTime) = (u16)(DSW(DS_g_stageTime) + 0xF0);
+        if (DSW(DS_g_stageTime) > STAGE_CLOCK_MAX) DSW(DS_g_stageTime) = STAGE_CLOCK_MAX;   /* ENH: 45:30 */
         snapshot_sim_state();
         enh_crash_sequence();
         DSW(DS_g_lives) = (u16)(DSW(DS_g_lives) - 1);

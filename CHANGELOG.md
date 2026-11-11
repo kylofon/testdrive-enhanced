@@ -12,6 +12,11 @@
 - Developer aids: `TD_ENH_DEMO=1` (straight to an attract-mode drive), `TD_ENH_STAGE=n`, `TD_ENH_UNIT=n` (start
   stage n, n units in) and `TD_ENH_SHOT=<folder>` (the shown frame once a second as BMP).
 
+### Fixes
+
+- The stage clock stops at 45:30. Left running for many hours, it used to overflow and could end the stage
+  early ([#3](https://github.com/kylofon/testdrive-enhanced/issues/3)).
+
 ## v1.0.4
 
 - The speedometer needle follows the car past 160 mph. The Countach and Testarossa reach about 172 and 175 mph,

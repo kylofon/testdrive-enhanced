@@ -1115,4 +1115,6 @@ void sim_timer_isr(void)
     if (DSB(DS_clock_running) == 0) DSW(DS_clock_ticks)--;  /* 0x3BAD */
 
     sim_run_tick(&r);                                      /* 0x3BEA .. iret 0x4673 */
+    if (DSW(DS_clock_ticks) > STAGE_CLOCK_MAX)             /* ENH: the clock stops at 45:30 (after the */
+        DSW(DS_clock_ticks) = STAGE_CLOCK_MAX;             /* stage-end autopilot's decrement) */
 }

@@ -33,4 +33,7 @@ void present_road_buffer(void);         /* 0x3AF7 */
 /* ---- simulation (game/sim*.c) ------------------------------------------------------------------ */
 void stage_enter_install_isr(void);     /* 0x4792 stage setup; installs sim_timer_isr via timer_set_driving_isr */
 void sim_timer_isr(void);               /* 0x3B1F driving ISR body (calls timer_isr() first) */
+/* ENH: the stage clock (DS_g_stageTime, 12 ticks a second) stops at 45:30. The original let it run past 0x7FFF,
+ * where its signed reads turn negative (issue #3: a stage left running for days could end early). */
+#define STAGE_CLOCK_MAX 32760u                         /* 2730 s = 45:30 */
 u16  car_data_ptr(void);                /* 0x493D returns 0x268F */
