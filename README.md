@@ -2,11 +2,7 @@
 
 An enhanced version of the EGA *Test Drive* (1987) by Accolade / Distinctive Software, running natively on
 SDL3. The game itself is the faithful C reimplementation from
-[test-drive-sdl3](https://github.com/kylofon/test-drive-sdl3), so driving, traffic, police and the game flow
-work as in the original. The view through the windscreen is redrawn at a higher resolution, further draw
-distance and 60 fps. Parts of the Amiga release can be mixed in: its intro, menus, cockpits, music, road, sky,
-cliffs, signs, traffic and police (see [Amiga features](#amiga-features)). It is not an emulator - the original
-data is not redistributed, and you need to get it yourself.
+[test-drive-sdl3](https://github.com/kylofon/test-drive-sdl3) Parts of the Amiga release can be mixed in through the launcher. It is not an emulator - the original data is not redistributed, and you need to get it yourself.
 
 ## How to play (Windows)
 
@@ -43,7 +39,7 @@ If driving stutters on an older PC, see `--res-scale` under [Run](#run).
   archives and the car `*.BIN` / `*.SS` files. By default it looks in `Game` under the working directory.
 * For the Amiga features, the Amiga release's disk too: the `.adf`, a folder holding it, or a folder with the files
   from it (default `Game Amiga`).
-* CMake 3.24+, a C11 compiler and SDL 3. The launcher needs a C++17 compiler and wxWidgets 3.2 (it is left out
+* For compiling, CMake 3.24+, a C11 compiler and SDL 3. The launcher needs a C++17 compiler and wxWidgets 3.2 (it is left out
   when wxWidgets isn't found, or with `-DTDE_LAUNCHER=OFF`).
 * A multi-core CPU for the default resolution. Rendering is split across all cores.
 
@@ -91,33 +87,7 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 with the Amiga features to mix in), the game folders, the window, and under **Game settings** the **Graphics**
 (resolution, sprite detail, frame rate) and the **Key Bindings**. See [`launcher/README.md`](launcher/README.md).
 
-## Amiga features
-
-The Amiga release of *Test Drive* runs on the same roads, but draws and plays them differently. With `--amiga`
-(the launcher's **Amiga** version) any mix of these replaces the DOS game's own; the Amiga disk is read for its
-pictures, shapes, songs and program. The game underneath stays the DOS one.
-
-* **Intro:** the Amiga title sequence (Accolade, the car driving off, the logo).
-* **Menu:** the Amiga showroom to choose the car, and its "play again / new car" menu.
-* **Dashboards:** each car's Amiga cockpit, its dashboard, gauges, steering wheel, gear knob, roof, window post,
-  hood and mirror frame; the road fills the screen above it.
-* **Music:** the Amiga songs, played on an emulated Paula, for the intro, the showroom, the gas station, the high
-  scores and the ending.
-* **Projection:** the road's shape as the Amiga draws it: rows further apart with distance, bends turning half as
-  fast and up to 90 degrees, crests that build up with distance.
-* **Sky:** the Amiga's blue sky with four clouds drifting and turning with the road, instead of the mountains.
-* **Cliffs:** the brown rock face, with the slant of the Amiga's cliff edge.
-* **Traffic:** the cars drive at the speed limit, the RX-7 a quarter faster, at their own speeds before the first
-  sign of a stage, and slower in the outer lane of a wide road.
-* **Cops:** a radar trap goes off at more than 15 mph over the limit; the patrol car starts further back at a
-  steady 108 mph (4 mph more each stage), tails you, passes and stops you, but never near the end of a stage.
-* **Wide roads:** the passing lanes of stages 1 and 2, which the DOS version leaves out: the road widens to the
-  right with lane marks and a solid centre line, the slow traffic keeps to the outer lane, and you can pass in the
-  inner one.
-* **Signs:** the Amiga's signs and posts, with its speed limits of 30, 55 and 65 mph, and the passing-lane and
-  merge signs.
-
-## Controls (from the original)
+## Controls
 
 * Arrow keys / numeric keypad: steer, accelerate, brake and shift through the gear gate, as in the original.
 * Esc: quit the current drive or menu.
@@ -136,18 +106,9 @@ pictures, shapes, songs and program. The game underneath stays the DOS one.
 * **Smooth motion:** 60 fps instead of 8. The road, the traffic and the scenery move continuously instead of
   stepping with the simulation, and steering drift is smoothed. The rows nearest the car keep straight edges.
 * **Horizon:** on the open side, a horizon below eye level with mountains above it and a valley floor below it
-  that moves as you drive. A hillside falls away under the left road edge, so on left bends the far road sits
-  on its own slope.
-* **Cliff:** the original's plain rock face, with the slant of its cliff-edge sprite, reaching the top of the
-  window. Its outline is notched, like the hillside's on the open side. The grass mounds at its foot are
-  always green. The original's colour depended on what was behind them.
-* **Objects:** signs, poles, traffic and the police car are scaled smoothly with distance and always use
-  their largest, most detailed sprite, without sparkling in the distance. They are hidden behind hill crests
-  and the cliff, and traffic that appears in the distance fades in.
+  that moves as you drive. 
 * **Distance and time** in the top right, in Test Drive II's style: miles left to the end of the stage and
   the stage clock, counting the same seconds the results screen shows.
-* **Kept from the original:** the mirror, dashboard, speeding ticket, "Pulling into…" messages, windscreen
-  cracks and GAME OVER.
 
 ### Game (from the faithful port)
 
