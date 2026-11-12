@@ -113,6 +113,13 @@ int amiga_play_again(void)
     return r;
 }
 
+void amiga_stage_results(s16 car, s16 stage, s32 avgSpeed, s16 secs, s32 score, s16 limit)
+{
+    amiga_screens_begin();
+    drive_stage_results(car, stage, avgSpeed, secs, score, limit);
+    amiga_screens_end();
+}
+
 const char *amiga_car_file(int idx)
 {
     return ready && idx >= 0 && idx < DS16(D_g_numCars) && idx < 16 ? car_files[idx] : "";

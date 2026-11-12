@@ -43,6 +43,7 @@ void  flow_amiga_start(void);                                       /* opens the
 int   flow_amiga_intro(void);                                       /* as run_intro */
 int   flow_amiga_car_select(void);                                  /* as car_select */
 int   flow_amiga_play_again(void);                                  /* as play_again_menu (no Esc) */
+int   flow_amiga_stage_results(s32 score);                          /* Amiga petrol station */
 void  flow_song_play(u16 ds_song);                                  /* snd_play_oneshot of DS:ds_song, or Amiga's */
 void  flow_song_stop(void);                                         /* snd_stop_oneshot, and the Amiga song */
 void  flow_ending_song(bool on);                                    /* Amiga music: EndSuccess at the dealership */

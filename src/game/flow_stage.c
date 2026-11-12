@@ -68,12 +68,29 @@ int run_game(void)
         if (DSW(DS_demo_mode) != 0) score = 0;
         DSL(DS_g_totalScore) = DSL(DS_g_totalScore) + (u32)score;
         if (DSS(DS_g_stage) >= 4) return 0;
-        stage_results(score);
+        if (!flow_amiga_stage_results(score)) {
+            stage_results(score);
+        } else {
+            /* The last run_stage() frame — with the "Pulling into the gas station"
+             * overlay still drawn in the EGA screen buffer — would otherwise be
+             * presented by delay_ticks(400) at the top of the next iteration, which
+             * pumps the DOS frame source. Clear the buffer before that happens. */
+            gfx_select_target(gfx_screen_desc());
+            gfx_clear_screen(0);
+            host_present_now();
+        }
+
         if (DSW(DS_g_tooSlow) != 0) return 0;
         DSW(DS_g_stage)++;
     }
     if (r != 0) {                                         /* -1: Esc or demo timeout */
         DSL(DS_g_totalScore) = 0;
+        /* Blank the EGA screen buffer and present, so that flow_song_play /
+         * flow_amiga_intro pumping before amiga_screens_begin() takes over
+         * shows black instead of the stale driving frame. */
+        gfx_select_target(gfx_screen_desc());
+        gfx_clear_screen(0);
+        host_present_now();
         return 1;
     }
     /* game over: wipe to black, unpaced */
@@ -105,12 +122,15 @@ s32 stage_score(void)
 
 /* 0x1993 stage_results — game_flow.md §4 (verified) */
 void stage_results(s32 score)
-{
-    FarPtr scr = gfx_screen_desc();
+{   FarPtr scr = gfx_screen_desc();
+    char sbName[30];
     DSW(DS_g_scrollDelay) = 15;
     flow_song_play(DS_g_songGas);                         /* AMIGA: or the Amiga song */
     DSS(DS_g_lives) = (s16)(DSS(DS_g_lives) + 2);
-    FarPtr sb  = load_archive(DSTR(DS_g_sbArchiveName), 0x109A);          /* "<car>sb.pes" (cached) */
+    snprintf(sbName, sizeof sbName, "%ssb.pes",
+    flow_car_name(DSS(DS_g_selectedCar)));
+    memcpy(DSTR(DS_g_sbArchiveName), sbName, strlen(sbName) + 1);
+    FarPtr sb = load_archive(DSTR(DS_g_sbArchiveName), 0x109A);          /* "<car>sb.pes" (cached) */
     FarPtr gas = load_archive(DSTR(0x768), 2000);                         /* "gas.pes" */
     FarPtr gcar = res_find(sb, DSTR(0x770));                              /* "gcar" */
     FarPtr bg   = res_find(gas, DSTR(0x775));                             /* "gas " */

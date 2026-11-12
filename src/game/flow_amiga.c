@@ -38,6 +38,28 @@ static int dos_car_of(int amiga_idx)
     return -1;
 }
 
+/* The Amiga car corresponding to a DOS car; -1 if there is no match. */
+static int amiga_car_of_dos(int dos_idx)
+{
+    const char *dos = flow_car_name(dos_idx);
+
+    for (int i = 0; i < amiga_car_count(); i++) {
+        const char *file = amiga_car_file(i);
+        const char *base = strrchr(file, '/');
+        base = base ? base + 1 : file;
+        size_t n = strlen(dos);
+        size_t k = 0;
+
+        while (k < n && base[k] &&
+               tolower((unsigned char)dos[k]) ==
+               tolower((unsigned char)base[k]))
+            k++;
+
+        if (n && k == n) return i;
+    }
+    return -1;
+}
+
 /* The songs: the DOS one, or the Amiga one in its place (Amiga music). */
 void flow_song_play(u16 ds_song)
 {
@@ -102,4 +124,24 @@ int flow_amiga_play_again(void)
     int r = amiga_play_again();
     kbd_flush();
     return r == 1 ? 0 : 1;
+}
+
+int flow_amiga_stage_results(s32 score)
+{
+    if (!amiga.menu || !amiga_ready())
+        return 0;
+
+    int car = amiga_car_of_dos(DSS(DS_g_selectedCar));
+    if (car < 0)
+        return 0;
+
+    amiga_stage_results(
+        (s16)car,
+        DSS(DS_g_stage),
+        DSS(DS_g_avgSpeed),
+        DSS(DS_g_stageTime),
+        score,
+        (s16)(DSS(DS_g_stageConstB) / 12)
+    );
+    return 1;
 }

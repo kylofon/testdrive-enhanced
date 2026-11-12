@@ -229,6 +229,7 @@ void stage_results(s16 car, s32 avgSpeed, s16 secs, s32 score, s16 limit)
 
     amem_cstr(rd32(DADDR(D_g_carNames) + 4u * (u32)(u16)car), name, sizeof name);
     snprintf(path, sizeof path, "%sgas", name);         /* '%sgas' 0x14970: Cars/<car>Gas */
+    fprintf(stderr, "DEBUG gas station file: [%s]\n", path);
     load_file(path);
     APTR back = D32(D_g_backView);
     ilbm_to_view(D32(D_g_loadedBuf), back);
