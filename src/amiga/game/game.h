@@ -52,4 +52,5 @@ void scores_enter_name(s32 score, s16 car, APTR names, APTR scores, APTR cars); 
 s16  scores_show(APTR names, APTR scores, APTR cars);   /* 0x13BD8: 0 fire / Ctrl-C, -1 timeout */
 s16  credits_show(void);                                /* 0x13A9E: 0 fire / Ctrl-C, -1 timeout */
 void stage_results(s16 car, s32 avgSpeed, s16 secs, s32 score, s16 limit);   /* 0x147E4 (gas station) */
+void drive_stage_results(s16 car, s16 stage, s32 avgSpeed, s16 secs, s32 score, s16 limit);
 void dealership_ending(void);                           /* 0x1CF76 */

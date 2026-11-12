@@ -192,6 +192,34 @@ static void stage_unload(s16 keep)
     SETD32(D_g_carRecord, 0);
 }
 
+/* Prepare and display the original Amiga petrol station between DOS stages. */
+void drive_stage_results(s16 car, s16 stage, s32 avgSpeed, s16 secs, s32 score, s16 limit)
+{
+    SETD16(D_g_stage, stage);
+    SETD16(D_g_tooSlow, 0);
+
+    stage_road_select(stage);
+    limit = (s16)ldiv_68k((s32)D32(D_g_stageConstB), 0xC);
+
+    stage_load(car);
+    stage_unload(1);
+
+    stage_results(car, avgSpeed, secs, score, limit);
+
+    /* Release resources retained by stage_unload(1). */
+    if (D32(D_dash_shapes)) free_mem(D32(D_dash_shapes));
+    SETD32(D_dash_shapes, 0);
+
+    if (D32(D_road_shapes)) free_mem(D32(D_road_shapes));
+    SETD32(D_road_shapes, 0);
+
+    if (D32(D_mask_pool)) free_mem(D32(D_mask_pool));
+    SETD32(D_mask_pool, 0);
+
+    if (D32(D_g_carRecord)) free_mem(D32(D_g_carRecord));
+    SETD32(D_g_carRecord, 0);
+}
+
 /* ================================================================ run_game 0x1C900 */
 
 s16 run_game(s16 car)

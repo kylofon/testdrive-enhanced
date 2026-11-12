@@ -21,6 +21,7 @@ int amiga_intro(void);
 int amiga_car_select(bool demo);
 /* "Play again / new car" (td 0x1D5C8). Returns 1 for the same car, 0 for a new one. */
 int amiga_play_again(void);
+void amiga_stage_results(s16 car, s16 stage, s32 avgSpeed, s16 secs, s32 score, s16 limit);
 /* The car file of an Amiga car index ("cars/P911t"), empty if there is none; and the number of cars. */
 const char *amiga_car_file(int idx);
 int amiga_car_count(void);
